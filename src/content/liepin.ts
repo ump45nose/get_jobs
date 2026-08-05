@@ -18,6 +18,95 @@ import type {
 let stopRequested = false;
 let applying = false;
 let activeTaskId: string | undefined;
+const LAUNCHER_HOST_ID = "get-jobs-extension-launcher";
+
+/**
+ * 在猎聘页面注入隔离样式的悬浮入口，解决工具栏图标未固定时无法发现插件的问题。
+ *
+ * @returns 悬浮入口存在或创建完成时返回。
+ */
+function mountPageLauncher(): void {
+  if (document.getElementById(LAUNCHER_HOST_ID)) {
+    return;
+  }
+
+  const host = document.createElement("div");
+  host.id = LAUNCHER_HOST_ID;
+  const shadow = host.attachShadow({ mode: "open" });
+  const style = document.createElement("style");
+  style.textContent = `
+    :host { all: initial; }
+    button {
+      position: fixed;
+      right: 76px;
+      bottom: 28px;
+      z-index: 2147483646;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 44px;
+      padding: 0 15px 0 10px;
+      border: 1px solid rgba(255, 255, 255, 0.42);
+      border-radius: 999px;
+      color: #fff;
+      background: linear-gradient(135deg, #ff7629, #e85a18);
+      box-shadow: 0 10px 28px rgba(154, 62, 18, 0.32);
+      font: 700 13px/1 system-ui, "Microsoft YaHei", sans-serif;
+      letter-spacing: .01em;
+      cursor: pointer;
+      transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 13px 32px rgba(154, 62, 18, 0.4);
+    }
+    button:focus-visible {
+      outline: 3px solid rgba(255, 118, 41, 0.28);
+      outline-offset: 3px;
+    }
+    button:disabled { cursor: wait; opacity: .72; }
+    .mark {
+      display: grid;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      border-radius: 50%;
+      color: #e85a18;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 900;
+    }
+  `;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.title = "打开 Get Jobs 猎聘投递助手";
+  button.setAttribute("aria-label", "打开 Get Jobs 猎聘投递助手");
+  button.innerHTML = '<span class="mark">GJ</span><span class="text">Get Jobs 助手</span>';
+  button.addEventListener("click", async () => {
+    const label = button.querySelector<HTMLElement>(".text");
+    button.disabled = true;
+    if (label) label.textContent = "正在打开…";
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: "OPEN_SIDE_PANEL",
+      } satisfies BackgroundRequest)) as ExtensionResponse<{ opened: boolean }>;
+      if (!response.ok) {
+        throw new Error(response.error || "侧边栏打开失败");
+      }
+      if (label) label.textContent = "Get Jobs 助手";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      button.title = `${message}；也可以点击 Chrome 工具栏中的插件图标`;
+      if (label) label.textContent = "打开失败，重试";
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  shadow.append(style, button);
+  document.documentElement.append(host);
+}
 
 /**
  * 等待指定毫秒数，同时保留给停止标记生效的机会。
@@ -292,6 +381,8 @@ chrome.runtime.onMessage.addListener((request: ContentRequest, _sender, sendResp
   }
   return false;
 });
+
+mountPageLauncher();
 
 // 通知后台页面脚本已重新装载；若旧任务仍在运行，后台会安全中止而不是重复点击。
 void chrome.runtime.sendMessage({ type: "CONTENT_READY" } satisfies BackgroundRequest).catch(() => undefined);
