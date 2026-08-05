@@ -291,12 +291,12 @@ export function App() {
               <div>
                 <h3>{job.jobTitle}</h3>
                 <p>{[job.compName, job.jobSalaryText, job.jobArea].filter(Boolean).join(" · ") || "岗位信息待补充"}</p>
-                <small>{job.buttonText || "未识别到沟通按钮"}</small>
+                <small>{job.buttonText || "点击投递时悬停识别沟通状态"}</small>
               </div>
               <button
                 type="button"
                 onClick={() => applyJob(job)}
-                disabled={busy || taskBusy || !job.buttonText || context.loggedIn === false}
+                disabled={busy || taskBusy || context.loggedIn === false}
               >
                 投递这一个
               </button>
