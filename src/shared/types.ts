@@ -1,8 +1,18 @@
+/** OpenAI 兼容接口与投递行为配置。 */
+export interface LiepinAiConfig {
+  baseUrl: string;
+  model: string;
+  resumeSummary: string;
+  previewBeforeSend: boolean;
+  sendResume: boolean;
+}
+
 /** 猎聘插件当前支持的配置。 */
 export interface LiepinConfig {
   keywords: string[];
   cityCode: string;
   salary: string;
+  ai: LiepinAiConfig;
 }
 
 /** 从猎聘岗位卡片中提取的稳定业务字段。 */
@@ -42,12 +52,30 @@ export type DeliveryOutcome =
   | "blocked"
   | "failed";
 
+/** 单个投递阶段的状态。 */
+export type DeliveryStepStatus = "success" | "failed" | "skipped" | "unknown";
+
+/** 沟通、招呼消息或简历发送阶段的独立结果。 */
+export interface DeliveryStepResult {
+  status: DeliveryStepStatus;
+  message: string;
+  evidence?: string;
+}
+
+/** 完整投递链路的分阶段回执。 */
+export interface DeliverySteps {
+  communication: DeliveryStepResult;
+  greeting?: DeliveryStepResult;
+  resume?: DeliveryStepResult;
+}
+
 /** 单岗位投递完成后返回给侧边栏的结果。 */
 export interface DeliveryResult {
   outcome: DeliveryOutcome;
   message: string;
   job: LiepinJobSnapshot;
   evidence?: string;
+  steps?: DeliverySteps;
 }
 
 /** 持久化的投递尝试记录。 */
@@ -85,21 +113,35 @@ export interface TaskState {
 /** 侧边栏初始化时一次性读取的应用状态。 */
 export interface AppState {
   config: LiepinConfig;
+  aiApiKeyConfigured: boolean;
   task: TaskState;
   attempts: DeliveryAttempt[];
+}
+
+/** AI 生成完成后返回给侧边栏的可编辑草稿。 */
+export interface GreetingDraft {
+  text: string;
 }
 
 /** 发送给 Content Script 的消息。 */
 export type ContentRequest =
   | { type: "INSPECT_LIEPIN" }
-  | { type: "APPLY_LIEPIN_JOB"; taskId: string; cardKey: string }
+  | {
+      type: "APPLY_LIEPIN_JOB";
+      taskId: string;
+      cardKey: string;
+      greetingText: string;
+      sendResume: boolean;
+    }
   | { type: "STOP_LIEPIN_TASK"; taskId: string };
 
 /** 发送给 Service Worker 的消息。 */
 export type BackgroundRequest =
   | { type: "OPEN_SIDE_PANEL" }
   | { type: "GET_APP_STATE" }
-  | { type: "SAVE_LIEPIN_CONFIG"; config: LiepinConfig }
+  | { type: "SAVE_LIEPIN_CONFIG"; config: LiepinConfig; apiKey?: string }
+  | { type: "CLEAR_LIEPIN_AI_KEY" }
+  | { type: "GENERATE_LIEPIN_GREETING"; job: LiepinJobSnapshot }
   | { type: "START_LIEPIN_TASK"; tabId: number; job: LiepinJobSnapshot }
   | { type: "REQUEST_LIEPIN_STOP"; taskId: string }
   | { type: "FINALIZE_LIEPIN_STOP"; taskId: string }
