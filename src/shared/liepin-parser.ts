@@ -2,8 +2,13 @@ import type { LiepinJobSnapshot, LiepinPageContext } from "./types";
 
 export const LIEPIN_SELECTORS = {
   jobCards: "div[class*='job-card-pc-container']",
-  chatHeader: ".__im_basic__header-wrap",
-  chatClose: "div.__im_basic__contacts-title svg",
+  chatContainer: ".im-ui-basic-chat-modal .im-ui-chat-container",
+  chatInput: "textarea.im-ui-textarea[placeholder*='请输入文字']",
+  chatSend: "button.im-ui-basic-send-btn",
+  chatResume: ".im-ui-action-button.action-resume",
+  sentText: ".im-ui-txt.send .im-ui-txt-content .text",
+  sentResume: ".im-ui-txt.send .im-ui-send-attachment-card",
+  chatClose: "[aria-label='close']",
   loggedIn: [
     "#header-quick-menu-user-info",
     "img.header-quick-menu-user-photo",
@@ -213,4 +218,3 @@ export function inspectLiepinPage(): LiepinPageContext {
     issue: supported ? undefined : "当前标签页不是猎聘页面",
   };
 }
-
