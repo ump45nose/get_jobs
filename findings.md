@@ -51,3 +51,9 @@
 - `c.liepin.com` 首页实际可匹配 `div[class*='job-card-pc-container']` 40 个，现有岗位卡片选择器可继续使用。
 - 修正方案：Content Script 使用 Shadow DOM 注入固定悬浮按钮；用户点击后由 Service Worker 调用 `chrome.sidePanel.open()`。
 - Manifest 的权限和内容脚本匹配范围改为全部猎聘 HTTPS 子域 `https://*.liepin.com/*`，并兼容裸域。
+
+## 真实 Chrome 第二次验收反馈
+
+- 已联系岗位在卡片上直接显示“继续聊”，插件可以识别并允许点击。
+- 未联系岗位默认只显示招聘者头像和姓名，“聊一聊”需要悬停招聘者区域后动态出现；首版侧边栏因 `buttonText` 为空而禁用投递按钮。
+- 修复目标：识别阶段不再因按钮尚未出现而禁用岗位；执行阶段先激活招聘者区域并等待目标按钮挂载，再区分“聊一聊”和“继续聊”。
