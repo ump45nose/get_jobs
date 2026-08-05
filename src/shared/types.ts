@@ -97,6 +97,7 @@ export type ContentRequest =
 
 /** 发送给 Service Worker 的消息。 */
 export type BackgroundRequest =
+  | { type: "OPEN_SIDE_PANEL" }
   | { type: "GET_APP_STATE" }
   | { type: "SAVE_LIEPIN_CONFIG"; config: LiepinConfig }
   | { type: "START_LIEPIN_TASK"; tabId: number; job: LiepinJobSnapshot }
