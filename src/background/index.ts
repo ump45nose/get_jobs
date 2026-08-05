@@ -1,4 +1,5 @@
 import { listRecentAttempts, saveDeliveryAttempt } from "./database";
+import { generateGreetingDraft } from "./ai";
 import { DEFAULT_LIEPIN_CONFIG, createIdleTask } from "../shared/defaults";
 import type {
   AppState,
@@ -11,6 +12,7 @@ import type {
 } from "../shared/types";
 
 const CONFIG_KEY = "liepinConfig";
+const AI_SECRET_KEY = "liepinAiSecret";
 const TASK_KEY = "liepinTask";
 const WATCHDOG_ALARM = "liepin-task-watchdog";
 
@@ -44,7 +46,47 @@ async function clearWatchdog(): Promise<void> {
  */
 async function getConfig(): Promise<LiepinConfig> {
   const stored = await chrome.storage.local.get(CONFIG_KEY);
-  return { ...DEFAULT_LIEPIN_CONFIG, ...(stored[CONFIG_KEY] as LiepinConfig | undefined) };
+  const saved = stored[CONFIG_KEY] as Partial<LiepinConfig> | undefined;
+  const savedAi = saved?.ai && typeof saved.ai === "object" ? saved.ai : undefined;
+  return {
+    keywords: Array.isArray(saved?.keywords)
+      ? saved.keywords.filter((item): item is string => typeof item === "string")
+      : DEFAULT_LIEPIN_CONFIG.keywords,
+    cityCode: typeof saved?.cityCode === "string" ? saved.cityCode : DEFAULT_LIEPIN_CONFIG.cityCode,
+    salary: typeof saved?.salary === "string" ? saved.salary : DEFAULT_LIEPIN_CONFIG.salary,
+    ai: {
+      baseUrl: typeof savedAi?.baseUrl === "string" ? savedAi.baseUrl : DEFAULT_LIEPIN_CONFIG.ai.baseUrl,
+      model: typeof savedAi?.model === "string" ? savedAi.model : DEFAULT_LIEPIN_CONFIG.ai.model,
+      resumeSummary: typeof savedAi?.resumeSummary === "string"
+        ? savedAi.resumeSummary
+        : DEFAULT_LIEPIN_CONFIG.ai.resumeSummary,
+      previewBeforeSend: typeof savedAi?.previewBeforeSend === "boolean"
+        ? savedAi.previewBeforeSend
+        : DEFAULT_LIEPIN_CONFIG.ai.previewBeforeSend,
+      sendResume: typeof savedAi?.sendResume === "boolean"
+        ? savedAi.sendResume
+        : DEFAULT_LIEPIN_CONFIG.ai.sendResume,
+    },
+  };
+}
+
+/**
+ * 读取仅供扩展可信页面使用的 AI 接口密钥。
+ *
+ * @returns 已保存密钥，未配置时返回空字符串。
+ */
+async function getAiApiKey(): Promise<string> {
+  const stored = await chrome.storage.local.get(AI_SECRET_KEY);
+  return typeof stored[AI_SECRET_KEY] === "string" ? stored[AI_SECRET_KEY] : "";
+}
+
+/**
+ * 限制本地扩展存储只向可信扩展页面开放，阻止 Content Script 直接读取密钥。
+ *
+ * @returns 设置完成时返回。
+ */
+async function protectLocalStorage(): Promise<void> {
+  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
 }
 
 /**
@@ -104,12 +146,13 @@ async function handleRequest(
       return { ok: true, data: { opened: true } };
     }
     case "GET_APP_STATE": {
-      const [config, task, attempts] = await Promise.all([
+      const [config, apiKey, task, attempts] = await Promise.all([
         getConfig(),
+        getAiApiKey(),
         getTask(),
         listRecentAttempts(),
       ]);
-      const state: AppState = { config, task, attempts };
+      const state: AppState = { config, aiApiKeyConfigured: Boolean(apiKey), task, attempts };
       return { ok: true, data: state };
     }
     case "SAVE_LIEPIN_CONFIG": {
@@ -117,9 +160,33 @@ async function handleRequest(
         keywords: request.config.keywords.map((item) => item.trim()).filter(Boolean),
         cityCode: request.config.cityCode.trim(),
         salary: request.config.salary.trim(),
+        ai: {
+          baseUrl: request.config.ai.baseUrl.trim(),
+          model: request.config.ai.model.trim(),
+          resumeSummary: request.config.ai.resumeSummary.trim(),
+          previewBeforeSend: typeof request.config.ai.previewBeforeSend === "boolean"
+            ? request.config.ai.previewBeforeSend
+            : DEFAULT_LIEPIN_CONFIG.ai.previewBeforeSend,
+          sendResume: typeof request.config.ai.sendResume === "boolean"
+            ? request.config.ai.sendResume
+            : DEFAULT_LIEPIN_CONFIG.ai.sendResume,
+        },
       };
-      await chrome.storage.local.set({ [CONFIG_KEY]: config });
+      const values: Record<string, unknown> = { [CONFIG_KEY]: config };
+      if (request.apiKey?.trim()) {
+        values[AI_SECRET_KEY] = request.apiKey.trim();
+      }
+      await chrome.storage.local.set(values);
       return { ok: true, data: config };
+    }
+    case "CLEAR_LIEPIN_AI_KEY": {
+      await chrome.storage.local.remove(AI_SECRET_KEY);
+      return { ok: true, data: { cleared: true } };
+    }
+    case "GENERATE_LIEPIN_GREETING": {
+      const [config, apiKey] = await Promise.all([getConfig(), getAiApiKey()]);
+      const text = await generateGreetingDraft(config.ai, apiKey, request.job);
+      return { ok: true, data: { text } };
     }
     case "START_LIEPIN_TASK": {
       return withTaskMutation(async () => {
@@ -227,12 +294,17 @@ async function handleRequest(
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  void protectLocalStorage().catch(() => undefined);
 });
 
 chrome.runtime.onStartup.addListener(() => {
   // 确保浏览器更新或配置恢复后，工具栏图标仍可直接打开侧边栏。
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  void protectLocalStorage().catch(() => undefined);
 });
+
+// Service Worker 被浏览器重新唤醒时也立即收紧存储访问级别。
+void protectLocalStorage().catch(() => undefined);
 
 chrome.runtime.onStartup.addListener(() => {
   // 浏览器重启后无法确认旧点击是否到达平台，统一进入需人工核对状态。
