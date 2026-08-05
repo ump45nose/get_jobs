@@ -94,6 +94,15 @@ async function handleRequest(
   sender: chrome.runtime.MessageSender,
 ): Promise<ExtensionResponse<unknown>> {
   switch (request.type) {
+    case "OPEN_SIDE_PANEL": {
+      const tabId = sender.tab?.id;
+      if (tabId === undefined) {
+        return { ok: false, error: "无法识别当前猎聘标签页" };
+      }
+      // 此消息由网页悬浮按钮的真实用户点击触发，立即打开对应标签页的侧边栏。
+      await chrome.sidePanel.open({ tabId });
+      return { ok: true, data: { opened: true } };
+    }
     case "GET_APP_STATE": {
       const [config, task, attempts] = await Promise.all([
         getConfig(),
@@ -217,6 +226,11 @@ async function handleRequest(
 }
 
 chrome.runtime.onInstalled.addListener(() => {
+  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  // 确保浏览器更新或配置恢复后，工具栏图标仍可直接打开侧边栏。
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
 
