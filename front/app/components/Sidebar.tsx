@@ -67,6 +67,7 @@ export default function Sidebar() {
     { href: '/env-config', icon: BiEnvelope, label: '环境配置', color: 'text-cyan-300' },
   ]
 
+  // 本 fork 不展示已关闭的 BOSS，避免用户进入无效配置页面。
   const platformGroup = [
     { href: '/liepin', icon: BiSearch, label: '猎聘', color: 'text-purple-300' },
     { href: '/51job', icon: BiTask, label: '51job', color: 'text-blue-300' },
