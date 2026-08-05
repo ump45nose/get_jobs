@@ -5,6 +5,13 @@ export const DEFAULT_LIEPIN_CONFIG: LiepinConfig = {
   keywords: [],
   cityCode: "",
   salary: "",
+  ai: {
+    baseUrl: "https://api.openai.com/v1",
+    model: "",
+    resumeSummary: "",
+    previewBeforeSend: true,
+    sendResume: true,
+  },
 };
 
 /**
@@ -21,4 +28,3 @@ export function createIdleTask(message = "尚未开始投递"): TaskState {
     message,
   };
 }
-
