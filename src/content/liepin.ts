@@ -153,6 +153,84 @@ function findChatButton(card: Element): { button: HTMLButtonElement; text: strin
 }
 
 /**
+ * 向猎聘招聘者区域发送悬停事件，触发 React 动态挂载“聊一聊/继续聊”按钮。
+ *
+ * @param element 招聘者信息区域。
+ * @returns 事件发送完成时返回。
+ */
+function dispatchRecruiterHover(card: HTMLElement, recruiter: HTMLElement): void {
+  const common = { bubbles: true, cancelable: true, composed: true, view: window };
+  const dispatchSequence = (element: HTMLElement) => {
+    // React 的 onMouseEnter 由冒泡 mouseover 合成；move 事件兼容页面额外的悬停判断。
+    element.dispatchEvent(new PointerEvent("pointerover", { ...common, pointerType: "mouse" }));
+    element.dispatchEvent(new PointerEvent("pointerenter", { ...common, bubbles: false, pointerType: "mouse" }));
+    element.dispatchEvent(new PointerEvent("pointermove", { ...common, pointerType: "mouse" }));
+    element.dispatchEvent(new MouseEvent("mouseover", common));
+    element.dispatchEvent(new MouseEvent("mouseenter", { ...common, bubbles: false }));
+    element.dispatchEvent(new MouseEvent("mousemove", common));
+  };
+  // 猎聘可能把监听器挂在卡片或招聘者区域，两层都触发以兼容当前 React 实现。
+  dispatchSequence(card);
+  dispatchSequence(recruiter);
+}
+
+/**
+ * 激活指定岗位招聘者区域，并等待动态沟通按钮挂载。
+ *
+ * @param cardKey 岗位卡片稳定键。
+ * @param timeoutMilliseconds 最大等待时长。
+ * @returns 最新卡片、岗位和按钮；超时返回 null。
+ */
+async function revealChatButton(
+  cardKey: string,
+  timeoutMilliseconds = 1_500,
+): Promise<{
+  card: Element;
+  job: LiepinJobSnapshot;
+  target: { button: HTMLButtonElement; text: string };
+} | null> {
+  const located = findJobCard(cardKey);
+  if (!located) return null;
+
+  const recruiterSelectors = [
+    ".recruiter-info-box",
+    "[class*='recruiter-info-box']",
+    "[class*='recruiter']",
+    "[class*='hr-']",
+    "[class*='contact']",
+  ];
+  let recruiter: HTMLElement | null = null;
+  for (const selector of recruiterSelectors) {
+    const candidate = located.card.querySelector<HTMLElement>(selector);
+    if (candidate) {
+      recruiter = candidate;
+      break;
+    }
+  }
+  if (!recruiter) return null;
+
+  located.card.scrollIntoView({ behavior: "smooth", block: "center" });
+  await delay(180);
+  if (!(located.card instanceof HTMLElement)) return null;
+  dispatchRecruiterHover(located.card, recruiter);
+
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (stopRequested) return null;
+    // React 可能重绘整张卡片，因此每次都通过 cardKey 重新定位最新节点。
+    const current = findJobCard(cardKey);
+    if (current) {
+      const target = findChatButton(current.card);
+      if (target) {
+        return { ...current, target };
+      }
+    }
+    await delay(80);
+  }
+  return null;
+}
+
+/**
  * 读取当前可见的安全验证或验证码提示。
  *
  * @returns 检测到验证时返回证据文本。
@@ -286,11 +364,11 @@ async function applySingleJob(taskId: string, cardKey: string): Promise<Delivery
   stopRequested = false;
 
   try {
-    const located = findJobCard(cardKey);
+    let located = findJobCard(cardKey);
     if (!located) {
       throw new Error("页面已更新，找不到所选岗位，请重新识别岗位");
     }
-    const { card, job } = located;
+    let { card, job } = located;
 
     if (detectLiepinLogin() === false) {
       const result: DeliveryResult = { outcome: "blocked", message: "请先登录猎聘", job };
@@ -309,11 +387,20 @@ async function applySingleJob(taskId: string, cardKey: string): Promise<Delivery
       return result;
     }
 
-    const target = findChatButton(card);
+    let target = findChatButton(card);
+    if (!target) {
+      const revealed = await revealChatButton(cardKey);
+      if (revealed) {
+        located = revealed;
+        card = revealed.card;
+        job = revealed.job;
+        target = revealed.target;
+      }
+    }
     if (!target) {
       const result: DeliveryResult = {
         outcome: "failed",
-        message: "当前岗位未找到“聊一聊”或“继续聊”按钮",
+        message: "悬停招聘者区域后仍未找到“聊一聊”或“继续聊”按钮",
         job,
       };
       await recordResult(taskId, result);
@@ -332,7 +419,7 @@ async function applySingleJob(taskId: string, cardKey: string): Promise<Delivery
     }
 
     card.scrollIntoView({ behavior: "smooth", block: "center" });
-    await delay(250);
+    await delay(180);
     if (stopRequested) {
       const result: DeliveryResult = { outcome: "cancelled", message: "用户已停止本次投递", job };
       await recordResult(taskId, result);
