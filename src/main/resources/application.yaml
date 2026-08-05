@@ -28,6 +28,11 @@ spring:
 server:
   port: 8888  # 后端 API 固定端口
 
+# 平台开关：BOSS 当前默认关闭，避免其反自动化检测影响其它平台。
+platforms:
+  boss:
+    enabled: false
+
 # 日志配置
 logging:
   level:

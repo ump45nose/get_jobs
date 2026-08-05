@@ -32,8 +32,9 @@ public class PlaywrightController {
         status.put("initialized", playwrightManager.isInitialized());
         status.put("cdpPort", playwrightManager.getCdpPort());
         status.put("hasBossPage", playwrightManager.getBossPage() != null);
+        status.put("bossEnabled", false);
         status.put("hasBrowser", playwrightManager.getBrowser() != null);
-        status.put("bossLoggedIn", playwrightManager.isLoggedIn("boss"));
+        status.put("bossLoggedIn", false);
 
         return ResponseEntity.ok(status);
     }
@@ -43,6 +44,15 @@ public class PlaywrightController {
      */
     @GetMapping("/test-navigate")
     public ResponseEntity<Map<String, String>> testNavigate() {
+        // BOSS Page 不会创建，旧调试接口直接返回关闭状态而不是触发空指针。
+        if (playwrightManager.getBossPage() == null) {
+            Map<String, String> disabled = new HashMap<>();
+            disabled.put("success", "false");
+            disabled.put("status", "disabled");
+            disabled.put("error", "BOSS 直聘已在当前分支关闭");
+            return ResponseEntity.status(503).body(disabled);
+        }
+
         try {
             playwrightManager.getBossPage().navigate("https://www.zhipin.com");
             String title = playwrightManager.getBossPage().title();

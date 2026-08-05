@@ -69,6 +69,14 @@ public class BossController {
     /** POST - 启动Boss投递任务 */
     @PostMapping("/execute")
     public ResponseEntity<Map<String, Object>> executeBoss() {
+        // BOSS 当前已关闭，直接返回明确状态，避免旧客户端触发浏览器自动化。
+        if (!bossJobService.isEnabled()) {
+            return ResponseEntity.status(503).body(Map.of(
+                    "status", "disabled",
+                    "message", "BOSS 直聘已在当前分支关闭"
+            ));
+        }
+
         if (bossJobService.isRunning()) {
             return ResponseEntity.ok(Map.of(
                     "status", "already_running",
@@ -89,6 +97,14 @@ public class BossController {
     public ResponseEntity<Map<String, Object>> startBoss() {
         Map<String, Object> response = new HashMap<>();
         try {
+            // BOSS 当前已关闭，避免旧前端路径访问未初始化的 BOSS Page。
+            if (!bossJobService.isEnabled()) {
+                response.put("success", false);
+                response.put("status", "disabled");
+                response.put("message", "BOSS 直聘已在当前分支关闭");
+                return ResponseEntity.status(503).body(response);
+            }
+
             if (!playwrightManager.isLoggedIn("boss")) {
                 response.put("success", false);
                 response.put("message", "请先登录Boss直聘");
@@ -147,6 +163,14 @@ public class BossController {
     public ResponseEntity<Map<String, Object>> logoutBoss() {
         Map<String, Object> response = new HashMap<>();
         try {
+            // BOSS 关闭后不再清理共享上下文，避免误删智联等其它平台的 Cookie。
+            if (!bossJobService.isEnabled()) {
+                response.put("success", false);
+                response.put("status", "disabled");
+                response.put("message", "BOSS 直聘已在当前分支关闭");
+                return ResponseEntity.status(503).body(response);
+            }
+
             playwrightManager.setLoginStatus("boss", false);
             cookieService.clearCookieByPlatform("boss", "manual logout");
             try { 

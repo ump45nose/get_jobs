@@ -26,7 +26,8 @@ public class CookieController {
     private final CookieService cookieService;
     private final PlaywrightManager playwrightManager;
 
-    private static final Set<String> ALLOWED_PLATFORMS = Set.of("boss", "liepin", "51job", "zhilian");
+    // 只允许当前启用的平台写入 Cookie，避免 BOSS 路径误清理共享上下文。
+    private static final Set<String> ALLOWED_PLATFORMS = Set.of("liepin", "51job", "zhilian");
 
     @GetMapping
     public ResponseEntity<Map<String, Object>> getCookie(@RequestParam("platform") String platform) {

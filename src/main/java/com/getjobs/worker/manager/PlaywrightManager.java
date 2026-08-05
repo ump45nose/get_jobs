@@ -11,6 +11,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -80,6 +81,10 @@ public class PlaywrightManager {
     // 记录智联招聘是否已处理过未登录引导（仅初始化时执行一次）
     private volatile boolean zhilianLoginGuided = false;
 
+    // BOSS 平台默认关闭，避免其反自动化检测影响其它平台的浏览器会话。
+    @Value("${platforms.boss.enabled:false}")
+    private boolean bossPlatformEnabled;
+
     // 默认超时时间（毫秒）
   private static final int DEFAULT_TIMEOUT = 30000;
 
@@ -115,6 +120,11 @@ public class PlaywrightManager {
         log.info("  初始化浏览器自动化引擎");
         log.info("========================================");
 
+        // 即使外部误将开关设为 true，本分支仍强制不初始化 BOSS，避免回退到不稳定流程。
+        if (bossPlatformEnabled) {
+            log.warn("检测到 platforms.boss.enabled=true，但当前分支强制关闭 BOSS 平台");
+        }
+
         try {
             // 启动Playwright
             playwright = Playwright.create();
@@ -135,14 +145,12 @@ public class PlaywrightManager {
                     .setViewportSize(null) // 不设置固定视口，使用浏览器窗口实际大小
                     .setUserAgent(
                             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"));
-            log.info("✓ BrowserContext已创建（所有平台共享）");
-            injectBossInitScript(context);
+            log.info("✓ BrowserContext已创建（非 BOSS 平台共享）");
 
-            // 顺序创建所有Page（避免并发创建Page导致的竞态条件）
-            log.info("开始创建所有平台的Page...");
-            bossPage = context.newPage();
-            bossPage.setDefaultTimeout(DEFAULT_TIMEOUT);
-            log.info("✓ Boss Page已创建");
+            // 顺序创建已启用平台的 Page；BOSS 页面故意不创建，避免触发其检测逻辑。
+            log.info("开始创建非 BOSS 平台的Page...");
+            bossPage = null;
+            log.info("BOSS 直聘平台已关闭，不创建 BOSS Page");
 
             liepinPage = context.newPage();
             liepinPage.setDefaultTimeout(DEFAULT_TIMEOUT);
@@ -156,17 +164,16 @@ public class PlaywrightManager {
             zhilianPage.setDefaultTimeout(DEFAULT_TIMEOUT);
             log.info("✓ 智联招聘 Page已创建");
 
-            // 并发执行各平台的初始化逻辑（导航、Cookie加载等）
-            log.info("开始并发初始化所有平台...");
-            CompletableFuture<Void> bossFuture = CompletableFuture.runAsync(this::setupBossPlatform);
+            // 并发执行已启用平台的初始化逻辑（导航、Cookie加载等）。
+            log.info("开始并发初始化非 BOSS 平台...");
             CompletableFuture<Void> liepinFuture = CompletableFuture.runAsync(this::setupLiepinPlatform);
             CompletableFuture<Void> job51Future = CompletableFuture.runAsync(this::setup51jobPlatform);
             CompletableFuture<Void> zhilianFuture = CompletableFuture.runAsync(this::setupZhilianPlatform);
 
             // 等待所有平台初始化完成
-            CompletableFuture.allOf(bossFuture, liepinFuture, job51Future, zhilianFuture).join();
+            CompletableFuture.allOf(liepinFuture, job51Future, zhilianFuture).join();
 
-            log.info("✓ 浏览器自动化引擎初始化完成（所有平台已并发启动）");
+            log.info("✓ 浏览器自动化引擎初始化完成（BOSS 已关闭，其它平台已并发启动）");
             log.info("========================================");
         } catch (Exception e) {
             log.error("✗ 浏览器自动化引擎初始化失败", e);
@@ -1517,10 +1524,18 @@ public class PlaywrightManager {
     }
 
     /**
-     * 检查Playwright是否已初始化
+     * 检查非 BOSS 平台所需的 Playwright 资源是否已初始化。
+     *
+     * @return Playwright、浏览器上下文以及当前启用平台页面均已创建时返回 true
      */
     public boolean isInitialized() {
-        return playwright != null && browser != null && bossPage != null;
+        // BOSS 页面已明确关闭，因此不能再把 bossPage 作为初始化成功条件。
+        return playwright != null
+                && browser != null
+                && context != null
+                && liepinPage != null
+                && job51Page != null
+                && zhilianPage != null;
     }
 
     /**

@@ -24,6 +24,8 @@ import java.util.function.Consumer;
 @RequiredArgsConstructor
 public class BossJobService implements JobPlatformService {
     private static final String PLATFORM = "boss";
+    // 当前分支明确关闭 BOSS 自动投递，避免调用不稳定的平台页面流程。
+    private static final boolean ENABLED = false;
 
     private final PlaywrightManager playwrightManager;
     private final ConfigService configService;
@@ -36,6 +38,12 @@ public class BossJobService implements JobPlatformService {
 
     @Override
     public void executeDelivery(Consumer<JobProgressMessage> progressCallback) {
+        // 在任务入口统一拦截，防止任何 API 或旧前端路径意外触发 BOSS 自动化。
+        if (!ENABLED) {
+            progressCallback.accept(JobProgressMessage.warning(PLATFORM, "BOSS 直聘已在当前分支关闭"));
+            return;
+        }
+
         if (isRunning) {
             progressCallback.accept(JobProgressMessage.warning(PLATFORM, "任务已在运行中"));
             return;
@@ -113,14 +121,25 @@ public class BossJobService implements JobPlatformService {
     public Map<String, Object> getStatus() {
         Map<String, Object> status = new HashMap<>();
         status.put("platform", PLATFORM);
+        status.put("enabled", ENABLED);
         status.put("isRunning", isRunning);
-        status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
+        // BOSS 页面未创建，因此关闭状态下始终报告未登录。
+        status.put("isLoggedIn", ENABLED && playwrightManager.isLoggedIn(PLATFORM));
         return status;
     }
 
     @Override
     public String getPlatformName() {
         return PLATFORM;
+    }
+
+    /**
+     * 返回 BOSS 平台是否允许执行自动投递。
+     *
+     * @return 当前分支固定返回 false
+     */
+    public boolean isEnabled() {
+        return ENABLED;
     }
 
     @Override
