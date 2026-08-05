@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Get Jobs - 猎聘助手",
-  "version": "0.1.2",
-  "description": "在用户当前登录的 Chrome 中完成猎聘岗位识别与单岗位投递确认。",
+  "version": "0.2.0",
+  "description": "在用户当前登录的 Chrome 中生成猎聘 AI 招呼，并确认消息与简历发送结果。",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "tabs", "sidePanel", "alarms"],
   "host_permissions": ["https://*.liepin.com/*", "https://liepin.com/*"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
