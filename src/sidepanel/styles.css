@@ -1,0 +1,267 @@
+:root {
+  font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+  color: #17202a;
+  background: #f4f7f9;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 340px;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: #fff;
+  background: #e76829;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+button.ghost {
+  color: #374151;
+  background: #edf1f4;
+}
+
+button.danger {
+  background: #b42318;
+}
+
+.app-shell {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  color: #fff;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #17202a 0%, #263b45 64%, #315b60 100%);
+  box-shadow: 0 8px 28px rgba(23, 32, 42, 0.18);
+}
+
+.hero h1,
+.panel h2,
+.job-card h3 {
+  margin: 0;
+}
+
+.hero h1 {
+  font-size: 22px;
+}
+
+.hero p {
+  margin: 8px 0 0;
+  color: #d8e1e5;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.eyebrow,
+.label {
+  display: block;
+  margin: 0 0 5px;
+  color: #7a8790;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.hero .eyebrow {
+  color: #f3ab82;
+}
+
+.status {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  color: #c8f7dd;
+  border: 1px solid rgba(200, 247, 221, 0.3);
+  border-radius: 999px;
+  background: rgba(17, 99, 66, 0.35);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.status-failed,
+.status-blocked,
+.status-interrupted {
+  color: #ffe0d8;
+  border-color: rgba(255, 224, 216, 0.3);
+  background: rgba(180, 35, 24, 0.4);
+}
+
+.panel {
+  padding: 14px;
+  border: 1px solid #e4e9ed;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(24, 39, 51, 0.05);
+}
+
+.compact-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.compact-grid strong {
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.notice {
+  padding: 10px 12px;
+  color: #6e3417;
+  border: 1px solid #f4c8ae;
+  border-radius: 12px;
+  background: #fff4ed;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.section-title,
+.job-card,
+.attempt-list article,
+.button-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-title {
+  margin-bottom: 12px;
+}
+
+.section-title h2 {
+  font-size: 16px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #4c5963;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 9px 10px;
+  color: #17202a;
+  border: 1px solid #dbe2e7;
+  border-radius: 10px;
+  outline: none;
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus {
+  border-color: #e76829;
+  box-shadow: 0 0 0 3px rgba(231, 104, 41, 0.1);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.job-list,
+.attempt-list {
+  display: grid;
+  gap: 9px;
+}
+
+.job-card,
+.attempt-list article {
+  padding: 11px;
+  border: 1px solid #e8ecef;
+  border-radius: 12px;
+  background: #fbfcfc;
+}
+
+.job-card > div,
+.attempt-list article > div {
+  min-width: 0;
+}
+
+.job-card h3,
+.attempt-list strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-card p,
+.attempt-list p {
+  margin: 4px 0;
+  color: #66737d;
+  font-size: 11px;
+}
+
+.job-card small {
+  color: #a44b20;
+}
+
+.job-card button {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.outcome {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #20633f;
+  background: #e7f7ee;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.outcome-failed,
+.outcome-blocked {
+  color: #922b21;
+  background: #fdecea;
+}
+
+.outcome-already-contacted {
+  color: #31576d;
+  background: #e7f1f6;
+}
+
+.empty {
+  margin: 0;
+  padding: 14px 4px;
+  color: #7a8790;
+  text-align: center;
+  font-size: 12px;
+}
+
