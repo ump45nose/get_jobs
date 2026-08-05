@@ -43,3 +43,11 @@
 - 旧标签页的迟到结果可能覆盖新任务；所有投递、停止、失败和落库消息现均携带并校验唯一 `taskId`。
 - 侧边栏关闭或消息链路失联可能让任务永久运行；已加入一分钟 `chrome.alarms` 看门狗，超时进入 `interrupted`。
 - IndexedDB 完成事件监听原先存在潜在注册时序风险；现于发起读写请求前创建事务完成 Promise。
+
+## 真实 Chrome 首次验收反馈
+
+- 插件已启用，但猎聘网页没有任何可见控件。
+- 真实 Chrome 进一步核验发现截图页为 `https://c.liepin.com/`，首版 Manifest 仅匹配 `https://www.liepin.com/*`，因此 Content Script 根本没有注入；这是页面无控件的直接技术根因。
+- `c.liepin.com` 首页实际可匹配 `div[class*='job-card-pc-container']` 40 个，现有岗位卡片选择器可继续使用。
+- 修正方案：Content Script 使用 Shadow DOM 注入固定悬浮按钮；用户点击后由 Service Worker 调用 `chrome.sidePanel.open()`。
+- Manifest 的权限和内容脚本匹配范围改为全部猎聘 HTTPS 子域 `https://*.liepin.com/*`，并兼容裸域。
