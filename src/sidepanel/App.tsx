@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { DEFAULT_LIEPIN_CONFIG, createIdleTask } from "../shared/defaults";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DEFAULT_LIEPIN_CONFIG,
+  createIdleTask,
+  randomBatchDelayMilliseconds,
+} from "../shared/defaults";
 import type {
   AppState,
   BackgroundRequest,
@@ -25,6 +29,16 @@ interface PendingGreetingDraft {
 
 /** 草稿生成流程独立于持久化投递任务的界面状态。 */
 type DraftActivity = "idle" | "saving" | "generating" | "ready" | "error";
+
+/** 当前页顺序投递在侧边栏中的临时运行状态。 */
+interface BatchProgress {
+  status: "confirming" | "running" | "waiting" | "stopping" | "completed" | "cancelled" | "failed";
+  total: number;
+  completed: number;
+  currentJob?: string;
+  nextDelaySeconds?: number;
+  message: string;
+}
 
 const EMPTY_CONTEXT: LiepinPageContext = {
   supported: false,
@@ -189,8 +203,22 @@ export function App() {
   const [draftActivity, setDraftActivity] = useState<DraftActivity>("idle");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const batchStopRequested = useRef(false);
+  const activeExecution = useRef<{ taskId: string; tabId: number } | null>(null);
 
   const taskBusy = task.status === "running" || task.status === "stopping";
+  const batchActive = batchProgress?.status === "running"
+    || batchProgress?.status === "waiting"
+    || batchProgress?.status === "stopping";
+  const knownContactedJobs = useMemo(
+    () => context.jobs.filter((job) => job.buttonText?.includes("继续聊")),
+    [context.jobs],
+  );
+  const batchCandidates = useMemo(
+    () => context.jobs.filter((job) => !job.buttonText?.includes("继续聊")),
+    [context.jobs],
+  );
   const pendingApiKey = Boolean(apiKey.trim());
   const aiProviderIssue = useMemo(
     () => getAiProviderIssue(config.ai.baseUrl, config.ai.model),
@@ -343,14 +371,14 @@ export function App() {
    * @param greetingText 用户确认后的招呼语。
    * @param tabId 用户点击岗位时的原始猎聘标签页。
    * @param sendResume 本次草稿生成时锁定的简历发送配置。
-   * @returns 页面闭环完成时返回。
+   * @returns 页面闭环完成时返回结果；插件异常时返回 null。
    */
   async function executeJob(
     job: LiepinJobSnapshot,
     greetingText: string,
     tabId: number,
     sendResume: boolean,
-  ) {
+  ): Promise<DeliveryResult | null> {
     setDraftActivity("idle");
     setBusy(true);
     setNotice(`准备投递：${job.jobTitle}`);
@@ -367,6 +395,7 @@ export function App() {
       taskStarted = true;
       taskId = startedTask.taskId;
       if (!taskId) throw new Error("后台未生成任务标识");
+      activeExecution.current = { taskId, tabId };
       const result = await sendContent<DeliveryResult>({
         type: "APPLY_LIEPIN_JOB",
         taskId,
@@ -377,6 +406,7 @@ export function App() {
       setNotice(result.message);
       await loadAppState();
       await inspectPage();
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (taskStarted && taskId) {
@@ -388,7 +418,9 @@ export function App() {
       }
       setNotice(message);
       await loadAppState();
+      return null;
     } finally {
+      activeExecution.current = null;
       setBusy(false);
     }
   }
@@ -480,13 +512,190 @@ export function App() {
     }
   }
 
+  /** 打开当前页顺序投递确认区，不在第一次点击时直接发送。 */
+  function requestBatchStart() {
+    if (busy || taskBusy || batchActive) {
+      setNotice("当前仍有岗位任务，请等待完成或先停止");
+      return;
+    }
+    if (pendingDraft) {
+      setNotice("请先确认或取消当前 AI 草稿");
+      return;
+    }
+    if (!context.supported || context.loggedIn !== true) {
+      setNotice("请先在当前标签页登录猎聘并重新识别岗位");
+      return;
+    }
+    if (!batchCandidates.length) {
+      setNotice("当前页没有可顺序投递的新岗位；已显示“继续聊”的岗位会被跳过");
+      return;
+    }
+    setBatchProgress({
+      status: "confirming",
+      total: batchCandidates.length,
+      completed: 0,
+      message: `将按页面顺序处理 ${batchCandidates.length} 个岗位，跳过 ${knownContactedJobs.length} 个已联系岗位`,
+    });
+  }
+
+  /** 取消尚未开始的当前页顺序投递确认。 */
+  function cancelBatchStart() {
+    setBatchProgress(null);
+    setNotice("已取消当前页顺序投递，未操作猎聘页面");
+  }
+
+  /**
+   * 在两次投递之间执行可中断的随机等待。
+   *
+   * @param milliseconds 本次随机得到的等待毫秒数。
+   * @param completed 已完成的岗位数。
+   * @param total 本批次岗位总数。
+   * @returns 用户未请求停止时返回 true。
+   */
+  async function waitForBatchInterval(milliseconds: number, completed: number, total: number): Promise<boolean> {
+    const deadline = Date.now() + milliseconds;
+    while (Date.now() < deadline) {
+      if (batchStopRequested.current) return false;
+      const nextDelaySeconds = Math.max(1, Math.ceil((deadline - Date.now()) / 1_000));
+      setBatchProgress({
+        status: "waiting",
+        total,
+        completed,
+        nextDelaySeconds,
+        message: `随机等待 ${nextDelaySeconds} 秒后处理下一个岗位`,
+      });
+      // 小步等待保证“停止顺序投递”无需等完整间隔结束。
+      await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(250, deadline - Date.now())));
+    }
+    return !batchStopRequested.current;
+  }
+
+  /**
+   * 在二次确认后按页面顺序生成并投递所有未联系岗位。
+   *
+   * @returns 批次完成、停止或遇到不确定结果时返回。
+   */
+  async function confirmBatchStart() {
+    const jobs = [...batchCandidates];
+    let completedCount = 0;
+    batchStopRequested.current = false;
+    setBusy(true);
+    try {
+      // 批量确认是一次明确授权：每个岗位仍独立生成 AI 文本并等待消息、简历回执。
+      const saved = await persistCurrentConfig(true);
+      const tab = await getActiveTab();
+      const tabHost = tab.url ? new URL(tab.url).hostname : "";
+      if (!tab.id || (tabHost !== "liepin.com" && !tabHost.endsWith(".liepin.com"))) {
+        throw new Error("请保持需要投递的猎聘岗位列表页为当前活动标签页");
+      }
+      if (!jobs.length) throw new Error("确认后未找到可顺序投递的岗位，请重新识别");
+
+      setBusy(false);
+      for (let index = 0; index < jobs.length; index += 1) {
+        if (batchStopRequested.current) break;
+        const job = jobs[index];
+        setBatchProgress({
+          status: "running",
+          total: jobs.length,
+          completed: index,
+          currentJob: job.jobTitle,
+          message: `正在生成第 ${index + 1}/${jobs.length} 个岗位的 AI 招呼`,
+        });
+        setDraftActivity("generating");
+        const draft = await sendBackground<GreetingDraft>({ type: "GENERATE_LIEPIN_GREETING", job });
+        setDraftActivity("idle");
+        if (batchStopRequested.current) break;
+        setBatchProgress({
+          status: "running",
+          total: jobs.length,
+          completed: index,
+          currentJob: job.jobTitle,
+          message: `正在执行第 ${index + 1}/${jobs.length} 个岗位并等待分阶段回执`,
+        });
+        const result = await executeJob(job, draft.text, tab.id, saved.config.ai.sendResume);
+        if (batchStopRequested.current) break;
+        if (!result || (result.outcome !== "delivered" && result.outcome !== "already-contacted")) {
+          const reason = result?.message ?? "插件未取得本岗位的完整结果";
+          setBatchProgress({
+            status: "failed",
+            total: jobs.length,
+            completed: index,
+            currentJob: job.jobTitle,
+            message: `批次已停止：${reason}`,
+          });
+          setNotice(`顺序投递在“${job.jobTitle}”停止：${reason}`);
+          return;
+        }
+
+        const completed = index + 1;
+        completedCount = completed;
+        if (completed < jobs.length) {
+          const delay = randomBatchDelayMilliseconds(saved.config.batch);
+          const shouldContinue = await waitForBatchInterval(delay, completed, jobs.length);
+          if (!shouldContinue) break;
+        }
+      }
+
+      if (batchStopRequested.current) {
+        setBatchProgress((current) => ({
+          status: "cancelled",
+          total: current?.total ?? jobs.length,
+          completed: current?.completed ?? 0,
+          currentJob: current?.currentJob,
+          message: "顺序投递已停止，不会继续处理剩余岗位",
+        }));
+        setNotice("顺序投递已停止");
+      } else {
+        setBatchProgress({
+          status: "completed",
+          total: jobs.length,
+          completed: jobs.length,
+          message: `当前页 ${jobs.length} 个新岗位已按顺序处理完成`,
+        });
+        setNotice(`当前页顺序投递完成；另跳过 ${knownContactedJobs.length} 个已联系岗位`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDraftActivity("error");
+      setBatchProgress({
+        status: "failed",
+        total: jobs.length,
+        completed: completedCount,
+        message: `批次未开始或已停止：${message}`,
+      });
+      setNotice(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 请求停止批次等待，并中止当前仍在运行的单岗位页面任务。 */
+  async function stopBatch() {
+    batchStopRequested.current = true;
+    setBatchProgress((current) => current ? { ...current, status: "stopping", message: "正在停止当前岗位和后续队列" } : current);
+    const active = activeExecution.current;
+    if (!active) return;
+    try {
+      await sendBackground<TaskState>({ type: "REQUEST_LIEPIN_STOP", taskId: active.taskId });
+      const stopped = await sendContent<{ stopped: boolean; applying: boolean }>({
+        type: "STOP_LIEPIN_TASK",
+        taskId: active.taskId,
+      }, active.tabId);
+      if (!stopped.applying) {
+        await sendBackground<TaskState>({ type: "FINALIZE_LIEPIN_STOP", taskId: active.taskId });
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="hero">
         <div>
           <p className="eyebrow">GET JOBS · LIEPIN MVP</p>
           <h1>猎聘投递助手</h1>
-          <p>使用当前 Chrome 登录态，只对你明确选择的岗位执行一次投递。</p>
+          <p>使用当前 Chrome 登录态，可单岗位确认，也可二次确认后顺序处理当前页。</p>
         </div>
         <span className={`status status-${headerStatus.className}`}>{headerStatus.label}</span>
       </header>
@@ -510,7 +719,7 @@ export function App() {
             <span className="label">配置</span>
             <h2>猎聘检索条件</h2>
           </div>
-          <button className="ghost" type="button" onClick={saveConfig} disabled={busy}>保存全部</button>
+          <button className="ghost" type="button" onClick={saveConfig} disabled={busy || batchActive}>保存全部</button>
         </div>
         <label>
           关键词（每行一个）
@@ -539,9 +748,9 @@ export function App() {
               {pendingApiKey ? "Key 待保存" : aiApiKeyConfigured ? "Key 已保存" : "Key 未配置"}
             </span>
             {aiApiKeyConfigured && !pendingApiKey && (
-              <button className="text-button" type="button" onClick={clearApiKey} disabled={busy}>清除</button>
+              <button className="text-button" type="button" onClick={clearApiKey} disabled={busy || batchActive}>清除</button>
             )}
-            <button className="ghost" type="button" onClick={saveAiConfig} disabled={busy}>保存 AI 配置</button>
+            <button className="ghost" type="button" onClick={saveAiConfig} disabled={busy || batchActive}>保存 AI 配置</button>
           </div>
         </div>
         <label>
@@ -653,6 +862,86 @@ export function App() {
         </section>
       )}
 
+      <section className="panel batch-panel">
+        <div className="section-title">
+          <div>
+            <span className="label">当前页面</span>
+            <h2>顺序投递全部新岗位</h2>
+          </div>
+          {batchActive ? (
+            <button className="danger" type="button" onClick={stopBatch}>停止顺序投递</button>
+          ) : (
+            <button
+              type="button"
+              onClick={requestBatchStart}
+              disabled={busy || taskBusy || Boolean(pendingDraft) || batchProgress?.status === "confirming"}
+            >
+              顺序投递当前页
+            </button>
+          )}
+        </div>
+        <div className="field-row">
+          <label>
+            最短间隔（秒）
+            <input
+              type="number"
+              min={5}
+              max={300}
+              value={config.batch.minIntervalSeconds}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  minIntervalSeconds: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.minIntervalSeconds,
+                },
+              })}
+            />
+          </label>
+          <label>
+            最长间隔（秒）
+            <input
+              type="number"
+              min={5}
+              max={300}
+              value={config.batch.maxIntervalSeconds}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  maxIntervalSeconds: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.maxIntervalSeconds,
+                },
+              })}
+            />
+          </label>
+        </div>
+        <p className="privacy-note">
+          当前识别 {context.jobs.length} 个岗位；可处理 {batchCandidates.length} 个，跳过 {knownContactedJobs.length} 个“继续聊”。
+          批量模式会在二次确认后逐岗生成 AI 文本并直接发送，不逐岗弹出草稿预览。
+        </p>
+        {batchProgress && (
+          <div className={`batch-progress batch-${batchProgress.status}`}>
+            <strong>{batchProgress.message}</strong>
+            <span>
+              进度 {batchProgress.completed}/{batchProgress.total}
+              {batchProgress.currentJob ? ` · ${batchProgress.currentJob}` : ""}
+              {batchProgress.nextDelaySeconds ? ` · 剩余约 ${batchProgress.nextDelaySeconds} 秒` : ""}
+            </span>
+            {batchProgress.status === "confirming" && (
+              <div className="button-row draft-actions">
+                <button className="ghost" type="button" onClick={cancelBatchStart}>取消</button>
+                <button type="button" onClick={confirmBatchStart}>确认并开始</button>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
       <section className="panel">
         <div className="section-title">
           <div>
@@ -660,8 +949,8 @@ export function App() {
             <h2>选择一个岗位验收</h2>
           </div>
           <div className="button-row">
-            {taskBusy && <button className="danger" type="button" onClick={stopTask} disabled={busy}>停止</button>}
-            <button className="ghost" type="button" onClick={inspectPage} disabled={busy}>重新识别</button>
+            {taskBusy && !batchActive && <button className="danger" type="button" onClick={stopTask} disabled={busy}>停止</button>}
+            <button className="ghost" type="button" onClick={inspectPage} disabled={busy || batchActive}>重新识别</button>
           </div>
         </div>
 
@@ -676,7 +965,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => prepareJob(job)}
-                disabled={busy || taskBusy || context.loggedIn === false}
+                disabled={busy || taskBusy || batchActive || context.loggedIn === false}
               >
                 {config.ai.previewBeforeSend ? "生成草稿" : "生成并投递"}
               </button>
