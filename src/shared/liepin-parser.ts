@@ -52,6 +52,41 @@ export function normalizeText(value: string | null | undefined): string {
 }
 
 /**
+ * 将页面文本规整为适合岗位绑定比较的形式。
+ *
+ * @param value 岗位、公司或聊天窗口文本。
+ * @returns 移除空白并统一大小写后的文本。
+ */
+function normalizeMatchText(value: string | null | undefined): string {
+  return normalizeText(value).replace(/\s+/g, "").toLocaleLowerCase();
+}
+
+/**
+ * 判断当前聊天文本是否属于用户选择的猎聘岗位。
+ *
+ * @param chatText 当前可见聊天容器文本。
+ * @param job 用户点击时保存的岗位快照。
+ * @returns 完整标题匹配，或核心标题与公司同时匹配时返回 true。
+ */
+export function matchLiepinChatToJob(chatText: string, job: LiepinJobSnapshot): boolean {
+  const normalizedChat = normalizeMatchText(chatText);
+  const normalizedTitle = normalizeMatchText(job.jobTitle);
+  if (!normalizedChat || !normalizedTitle) return false;
+
+  // 完整标题是原有的强证据，即使猎头职位没有公开真实公司名也可继续使用。
+  if (normalizedChat.includes(normalizedTitle)) return true;
+
+  // 猎聘聊天头会移除卡片末尾的【地区】；降级匹配时必须同时命中公司，避免误绑同名岗位。
+  const coreTitle = normalizeMatchText(normalizeText(job.jobTitle).replace(/\s*【[^】]+】\s*$/, ""));
+  const company = normalizeMatchText(job.compName);
+  return coreTitle !== normalizedTitle
+    && Boolean(coreTitle)
+    && Boolean(company)
+    && normalizedChat.includes(coreTitle)
+    && normalizedChat.includes(company);
+}
+
+/**
  * 判断元素是否处于可交互状态。
  *
  * @param element 待检测元素。
