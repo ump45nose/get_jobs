@@ -3,6 +3,7 @@ import {
   detectLiepinLogin,
   inspectLiepinPage,
   isElementVisible,
+  matchLiepinChatToJob,
   normalizeText,
   parseLiepinJobCard,
   parseLiepinJobCards,
@@ -276,8 +277,8 @@ function detectCommunicationEvidence(job: LiepinJobSnapshot): string | undefined
   const chat = getActiveChatContainer();
   if (!chat) return undefined;
   const text = normalizeText(chat.textContent);
-  // 当前聊天窗口必须包含所选岗位标题，避免把全局提示或其他会话误判为成功。
-  if (text.includes(job.jobTitle)) {
+  // 使用完整标题，或“核心标题 + 公司”绑定当前窗口，兼容聊天头省略卡片地区后缀。
+  if (matchLiepinChatToJob(text, job)) {
     return `猎聘聊天窗口已打开：${job.jobTitle}`;
   }
   return undefined;
@@ -464,7 +465,13 @@ async function sendGreetingAndWait(greetingText: string): Promise<DeliveryStepRe
 
   sendButton.click();
   return waitForStepReceipt(
-    () => countSentGreeting(chat, greetingText) > baseline ? greetingText : undefined,
+    () => {
+      // React 可能在发送后替换聊天节点，每轮重新获取当前窗口再检查回执。
+      const currentChat = getActiveChatContainer();
+      return currentChat && countSentGreeting(currentChat, greetingText) > baseline
+        ? greetingText
+        : undefined;
+    },
     "AI 招呼语已发送",
     "点击发送后未检测到 AI 招呼语回执",
   );
@@ -503,6 +510,14 @@ async function sendResumeAndWait(): Promise<DeliveryStepResult> {
   if (!chat) {
     return { status: "failed", message: "聊天窗口已消失，无法发送简历" };
   }
+  const existingResumeCards = countSentResumeCards(chat);
+  if (existingResumeCards > 0) {
+    return {
+      status: "success",
+      message: "当前聊天已存在本人简历卡片，未重复发送",
+      evidence: `当前聊天已有 ${existingResumeCards} 张本人简历卡片`,
+    };
+  }
   const resumeButton = chat.querySelector<HTMLElement>(LIEPIN_SELECTORS.chatResume);
   if (!resumeButton || !isElementVisible(resumeButton)) {
     return { status: "failed", message: "未找到猎聘“发简历”入口" };
@@ -512,7 +527,13 @@ async function sendResumeAndWait(): Promise<DeliveryStepResult> {
   resumeButton.click();
   let confirmationClicked = false;
   return waitForStepReceipt(
-    () => countSentResumeCards(chat) > baseline ? "当前聊天新增本人简历卡片" : undefined,
+    () => {
+      // React 可能在简历发送后替换聊天节点，始终在当前可见窗口中确认新增卡片。
+      const currentChat = getActiveChatContainer();
+      return currentChat && countSentResumeCards(currentChat) > baseline
+        ? "当前聊天新增本人简历卡片"
+        : undefined;
+    },
     "简历已发送",
     "点击发简历后未检测到简历卡片回执",
     8_000,
@@ -701,6 +722,7 @@ async function applySingleJob(
       ? await sendResumeAndWait()
       : skippedStep("配置已关闭自动发送简历");
     const completed = resume.status === "success" || resume.status === "skipped";
+    const resumeAlreadyPresent = resume.status === "success" && resume.message.includes("未重复发送");
     const result: DeliveryResult = {
       outcome: completed
         ? "delivered"
@@ -711,7 +733,9 @@ async function applySingleJob(
             : "failed",
       message: completed
         ? sendResume
-          ? "AI 招呼语与简历均已确认发送"
+          ? resumeAlreadyPresent
+            ? "AI 招呼语已确认发送；当前聊天已有简历，未重复发送"
+            : "AI 招呼语与简历均已确认发送"
           : "AI 招呼语已确认发送，配置未要求发送简历"
         : resume.message,
       job: { ...job, buttonText: target.text },
