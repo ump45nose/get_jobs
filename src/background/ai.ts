@@ -31,10 +31,11 @@ export function buildChatCompletionsUrl(baseUrl: string): string {
   const path = url.pathname.replace(/\/+$/, "");
   if (path.endsWith("/chat/completions")) {
     url.pathname = path;
-  } else if (path.endsWith("/v1")) {
+  } else if (path) {
+    // 兼容 /v1、智谱 /api/paas/v4 等已经包含版本号的 Base URL。
     url.pathname = `${path}/chat/completions`;
   } else {
-    url.pathname = `${path}/v1/chat/completions`.replace(/\/+/g, "/");
+    url.pathname = "/v1/chat/completions";
   }
   url.search = "";
   url.hash = "";

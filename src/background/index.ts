@@ -177,7 +177,9 @@ async function handleRequest(
         values[AI_SECRET_KEY] = request.apiKey.trim();
       }
       await chrome.storage.local.set(values);
-      return { ok: true, data: config };
+      // 重新读取密钥状态，避免侧边栏只根据输入框内容乐观显示“已保存”。
+      const aiApiKeyConfigured = Boolean(await getAiApiKey());
+      return { ok: true, data: { config, aiApiKeyConfigured } };
     }
     case "CLEAR_LIEPIN_AI_KEY": {
       await chrome.storage.local.remove(AI_SECRET_KEY);

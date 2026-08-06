@@ -27,8 +27,14 @@ describe("AI 招呼语", () => {
     expect(buildChatCompletionsUrl("https://api.example.com/v1")).toBe(
       "https://api.example.com/v1/chat/completions",
     );
-    expect(buildChatCompletionsUrl("http://127.0.0.1:8000/v1")).toBe(
-      "http://127.0.0.1:8000/v1/chat/completions",
+    expect(buildChatCompletionsUrl("http://127.0.0.1:3001/v1")).toBe(
+      "http://127.0.0.1:3001/v1/chat/completions",
+    );
+    expect(buildChatCompletionsUrl("https://open.bigmodel.cn/api/paas/v4")).toBe(
+      "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    );
+    expect(buildChatCompletionsUrl("https://api.example.com")).toBe(
+      "https://api.example.com/v1/chat/completions",
     );
     expect(() => buildChatCompletionsUrl("http://api.example.com/v1")).toThrow("仅允许 HTTPS");
     expect(() => buildChatCompletionsUrl("https://user:pass@api.example.com/v1")).toThrow("用户名或密码");
