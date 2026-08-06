@@ -4,6 +4,7 @@ import {
   detectLiepinLogin,
   extractLiepinJobId,
   getLiepinChatButtonText,
+  matchLiepinChatToJob,
   parseLiepinJobCards,
 } from "./liepin-parser";
 
@@ -51,5 +52,30 @@ describe("猎聘岗位卡片解析", () => {
     document.body.innerHTML = '<a id="header-quick-menu-login" href="/login">登录</a>';
     expect(detectLiepinLogin()).toBe(false);
   });
-});
 
+  it("使用核心岗位名和公司匹配省略地区后缀的聊天窗口", () => {
+    const job = {
+      cardKey: "job-1",
+      fingerprint: "1",
+      jobTitle: "大模型应用工程师【杭州-浦沿】",
+      compName: "中控技术",
+    };
+    const chatText = "黄女士 中控技术·招聘专员 大模型应用工程师 硕士 3年以上";
+
+    expect(matchLiepinChatToJob(chatText, job)).toBe(true);
+    expect(matchLiepinChatToJob("其他公司 大模型应用工程师", job)).toBe(false);
+  });
+
+  it("保留岗位核心括号内容并继续支持完整标题匹配", () => {
+    const job = {
+      cardKey: "job-2",
+      fingerprint: "2",
+      jobTitle: "大模型Agent开发工程师（临床试验方向）【杭州】",
+      compName: "示例医药",
+    };
+
+    expect(matchLiepinChatToJob("示例医药 大模型Agent开发工程师（临床试验方向）", job)).toBe(true);
+    expect(matchLiepinChatToJob("示例医药 大模型Agent开发工程师", job)).toBe(false);
+    expect(matchLiepinChatToJob("大模型Agent开发工程师（临床试验方向）【杭州】", job)).toBe(true);
+  });
+});
