@@ -23,9 +23,9 @@ export const LIEPIN_SELECTORS = {
 } as const;
 
 const TITLE_SELECTORS = [
-  "a[data-nick='job-detail-job-info']",
-  ".job-title-box a",
   "[class*='job-title']",
+  ".job-title-box a",
+  "a[data-nick='job-detail-job-info']",
   "a[href*='/job/']",
 ];
 const COMPANY_SELECTORS = [
@@ -76,8 +76,8 @@ export function matchLiepinChatToJob(chatText: string, job: LiepinJobSnapshot): 
   // 完整标题是原有的强证据，即使猎头职位没有公开真实公司名也可继续使用。
   if (normalizedChat.includes(normalizedTitle)) return true;
 
-  // 猎聘聊天头会移除卡片末尾的【地区】；降级匹配时必须同时命中公司，避免误绑同名岗位。
-  const coreTitle = normalizeMatchText(normalizeText(job.jobTitle).replace(/\s*【[^】]+】\s*$/, ""));
+  // 兼容旧快照把薪资、经验拼到“【地区】”之后的情况；聊天头只保留第一个地区标记前的核心岗位名。
+  const coreTitle = normalizeMatchText(normalizeText(job.jobTitle).replace(/\s*【[^】]+】.*$/, ""));
   const company = normalizeMatchText(job.compName);
   return coreTitle !== normalizedTitle
     && Boolean(coreTitle)
