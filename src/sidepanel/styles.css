@@ -113,6 +113,19 @@ button.danger {
   background: rgba(180, 35, 24, 0.4);
 }
 
+.status-generating,
+.status-ready {
+  color: #fff0c2;
+  border-color: rgba(255, 240, 194, 0.35);
+  background: rgba(153, 92, 18, 0.4);
+}
+
+.status-previous {
+  color: #d8e1e5;
+  border-color: rgba(216, 225, 229, 0.28);
+  background: rgba(77, 92, 102, 0.45);
+}
+
 .panel {
   padding: 14px;
   border: 1px solid #e4e9ed;
@@ -226,9 +239,15 @@ textarea:focus {
   color: #20633f;
 }
 
+.key-state.pending {
+  color: #9a5c12;
+}
+
 .key-tools {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 7px;
 }
 
@@ -237,6 +256,17 @@ button.text-button {
   color: #922b21;
   background: transparent;
   font-size: 10px;
+}
+
+.config-warning {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  color: #8a3b12;
+  border: 1px solid #f1bd9e;
+  border-radius: 9px;
+  background: #fff4ed;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .privacy-note,

@@ -11,6 +11,7 @@ import type {
   LiepinConfig,
   LiepinJobSnapshot,
   LiepinPageContext,
+  SavedLiepinConfig,
   TaskState,
 } from "../shared/types";
 
@@ -21,6 +22,9 @@ interface PendingGreetingDraft {
   text: string;
   sendResume: boolean;
 }
+
+/** 草稿生成流程独立于持久化投递任务的界面状态。 */
+type DraftActivity = "idle" | "saving" | "generating" | "ready" | "error";
 
 const EMPTY_CONTEXT: LiepinPageContext = {
   supported: false,
@@ -100,6 +104,26 @@ async function ensureAiHostPermission(baseUrl: string): Promise<void> {
 }
 
 /**
+ * 检查明确不可能工作的模型与服务商组合。
+ *
+ * @param baseUrl 用户输入的 AI 接口地址。
+ * @param model 用户输入的模型名称。
+ * @returns 可操作的修正提示；组合正常时返回空值。
+ */
+function getAiProviderIssue(baseUrl: string, model: string): string | null {
+  try {
+    const url = new URL(baseUrl.trim());
+    const normalizedModel = model.trim().toLowerCase();
+    if (url.hostname === "api.openai.com" && normalizedModel.startsWith("glm")) {
+      return "GLM 模型不能使用 OpenAI 官方 Base URL；请改用你的本机代理地址，或智谱 https://open.bigmodel.cn/api/paas/v4";
+    }
+  } catch {
+    // URL 格式错误由保存时的权限解析统一给出，避免输入过程中重复闪烁错误。
+  }
+  return null;
+}
+
+/**
  * 将任务状态映射为中文标签。
  *
  * @param status 任务状态。
@@ -162,10 +186,25 @@ export function App() {
   const [apiKey, setApiKey] = useState("");
   const [aiApiKeyConfigured, setAiApiKeyConfigured] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<PendingGreetingDraft | null>(null);
+  const [draftActivity, setDraftActivity] = useState<DraftActivity>("idle");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
   const taskBusy = task.status === "running" || task.status === "stopping";
+  const pendingApiKey = Boolean(apiKey.trim());
+  const aiProviderIssue = useMemo(
+    () => getAiProviderIssue(config.ai.baseUrl, config.ai.model),
+    [config.ai.baseUrl, config.ai.model],
+  );
+  const headerStatus = useMemo(() => {
+    if (taskBusy) return { label: statusLabel(task.status), className: task.status };
+    if (draftActivity === "saving") return { label: "保存中", className: "generating" };
+    if (draftActivity === "generating") return { label: "生成中", className: "generating" };
+    if (draftActivity === "ready") return { label: "待确认", className: "ready" };
+    if (draftActivity === "error") return { label: "草稿失败", className: "failed" };
+    if (task.status === "idle") return { label: statusLabel(task.status), className: task.status };
+    return { label: `上次${statusLabel(task.status)}`, className: "previous" };
+  }, [draftActivity, task.status, taskBusy]);
   const loginLabel = useMemo(() => {
     if (!context.supported) return "请打开猎聘搜索页";
     if (context.loggedIn === true) return "已登录";
@@ -208,28 +247,74 @@ export function App() {
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
   }, [inspectPage, loadAppState]);
 
-  /** 保存猎聘搜索配置。 */
+  /** 从当前表单状态构建待保存配置，确保生成按钮使用尚未手动保存的最新输入。 */
+  function buildCurrentConfig(): LiepinConfig {
+    return {
+      ...config,
+      keywords: keywordsText.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean),
+    };
+  }
+
+  /**
+   * 持久化当前表单并使用后台回读结果确认 Key 状态。
+   *
+   * @param requireAiCredentials 是否要求本次保存后可立即生成 AI 草稿。
+   * @returns 后台规范化后的配置和真实密钥状态。
+   */
+  async function persistCurrentConfig(requireAiCredentials: boolean): Promise<SavedLiepinConfig> {
+    const next = buildCurrentConfig();
+    const nextApiKey = apiKey.trim();
+    if (requireAiCredentials && !next.ai.model.trim()) {
+      throw new Error("请先填写 AI 模型名称");
+    }
+    if (requireAiCredentials && !nextApiKey && !aiApiKeyConfigured) {
+      throw new Error("请先填写 API Key；点击生成草稿时会自动保存到本机扩展存储");
+    }
+    const providerIssue = getAiProviderIssue(next.ai.baseUrl, next.ai.model);
+    if (next.ai.model.trim() && providerIssue) {
+      throw new Error(providerIssue);
+    }
+    if (next.ai.model.trim() || nextApiKey || aiApiKeyConfigured) {
+      await ensureAiHostPermission(next.ai.baseUrl);
+    }
+    const saved = await sendBackground<SavedLiepinConfig>({
+      type: "SAVE_LIEPIN_CONFIG",
+      config: next,
+      apiKey: nextApiKey || undefined,
+    });
+    setConfig(saved.config);
+    setKeywordsText(saved.config.keywords.join("\n"));
+    setAiApiKeyConfigured(saved.aiApiKeyConfigured);
+    if (nextApiKey && !saved.aiApiKeyConfigured) {
+      throw new Error("API Key 未能写入本机扩展存储，请重新加载扩展后重试");
+    }
+    if (nextApiKey) setApiKey("");
+    return saved;
+  }
+
+  /** 保存猎聘检索条件与当前 AI 配置。 */
   async function saveConfig() {
     setBusy(true);
     try {
-      const next: LiepinConfig = {
-        ...config,
-        keywords: keywordsText.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean),
-      };
-      await ensureAiHostPermission(next.ai.baseUrl);
-      const saved = await sendBackground<LiepinConfig>({
-        type: "SAVE_LIEPIN_CONFIG",
-        config: next,
-        apiKey: apiKey || undefined,
-      });
-      setConfig(saved);
-      setKeywordsText(saved.keywords.join("\n"));
-      if (apiKey) {
-        setAiApiKeyConfigured(true);
-        setApiKey("");
-      }
+      await persistCurrentConfig(false);
       setNotice("猎聘与 AI 配置已保存");
     } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 从 AI 区域独立保存接口、模型、密钥和简历摘要。 */
+  async function saveAiConfig() {
+    setBusy(true);
+    setDraftActivity("saving");
+    try {
+      await persistCurrentConfig(true);
+      setDraftActivity("idle");
+      setNotice("AI 配置与 API Key 已保存，可直接生成草稿");
+    } catch (error) {
+      setDraftActivity("error");
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
@@ -266,6 +351,7 @@ export function App() {
     tabId: number,
     sendResume: boolean,
   ) {
+    setDraftActivity("idle");
     setBusy(true);
     setNotice(`准备投递：${job.jobTitle}`);
     let taskStarted = false;
@@ -315,25 +401,33 @@ export function App() {
    */
   async function prepareJob(job: LiepinJobSnapshot) {
     setBusy(true);
-    setNotice(`正在生成 AI 招呼：${job.jobTitle}`);
+    setDraftActivity("saving");
+    setNotice(`正在保存 AI 配置：${job.jobTitle}`);
     try {
+      // 权限申请必须紧邻岗位按钮的真实用户手势，因此先保存再读取目标标签页。
+      const saved = await persistCurrentConfig(true);
       const tab = await getActiveTab();
       const tabHost = tab.url ? new URL(tab.url).hostname : "";
       if (!tab.id || (tabHost !== "liepin.com" && !tabHost.endsWith(".liepin.com"))) {
         throw new Error("请先打开需要投递的猎聘岗位列表页");
       }
-      const sendResume = config.ai.sendResume;
+      setDraftActivity("generating");
+      setNotice(`正在生成 AI 招呼：${job.jobTitle}`);
+      const sendResume = saved.config.ai.sendResume;
       const draft = await sendBackground<GreetingDraft>({ type: "GENERATE_LIEPIN_GREETING", job });
-      if (config.ai.previewBeforeSend) {
+      if (saved.config.ai.previewBeforeSend) {
         setPendingDraft({ tabId: tab.id, job, text: draft.text, sendResume });
+        setDraftActivity("ready");
         setNotice("AI 草稿已生成，请预览或编辑后确认发送");
       } else {
         setNotice("AI 草稿已生成，正在按配置直接执行页面发送");
+        setDraftActivity("idle");
         setBusy(false);
         await executeJob(job, draft.text, tab.id, sendResume);
         return;
       }
     } catch (error) {
+      setDraftActivity("error");
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
@@ -350,12 +444,14 @@ export function App() {
     }
     const selected = pendingDraft;
     setPendingDraft(null);
+    setDraftActivity("idle");
     await executeJob(selected.job, text, selected.tabId, selected.sendResume);
   }
 
   /** 取消尚未产生任何页面发送动作的草稿。 */
   function cancelDraft() {
     setPendingDraft(null);
+    setDraftActivity("idle");
     setNotice("已取消本次草稿，未操作猎聘页面");
   }
 
@@ -392,7 +488,7 @@ export function App() {
           <h1>猎聘投递助手</h1>
           <p>使用当前 Chrome 登录态，只对你明确选择的岗位执行一次投递。</p>
         </div>
-        <span className={`status status-${task.status}`}>{statusLabel(task.status)}</span>
+        <span className={`status status-${headerStatus.className}`}>{headerStatus.label}</span>
       </header>
 
       <section className="panel compact-grid">
@@ -401,7 +497,7 @@ export function App() {
           <strong>{loginLabel}</strong>
         </div>
         <div>
-          <span className="label">任务消息</span>
+          <span className="label">{taskBusy || task.status === "idle" ? "任务消息" : "上次投递结果"}</span>
           <strong>{task.message}</strong>
         </div>
       </section>
@@ -414,7 +510,7 @@ export function App() {
             <span className="label">配置</span>
             <h2>猎聘检索条件</h2>
           </div>
-          <button className="ghost" type="button" onClick={saveConfig} disabled={busy}>保存</button>
+          <button className="ghost" type="button" onClick={saveConfig} disabled={busy}>保存全部</button>
         </div>
         <label>
           关键词（每行一个）
@@ -439,12 +535,13 @@ export function App() {
             <h2>招呼语和简历</h2>
           </div>
           <div className="key-tools">
-            <span className={`key-state ${aiApiKeyConfigured ? "configured" : ""}`}>
-              {aiApiKeyConfigured ? "Key 已保存" : "Key 未配置"}
+            <span className={`key-state ${pendingApiKey ? "pending" : aiApiKeyConfigured ? "configured" : ""}`}>
+              {pendingApiKey ? "Key 待保存" : aiApiKeyConfigured ? "Key 已保存" : "Key 未配置"}
             </span>
-            {aiApiKeyConfigured && (
+            {aiApiKeyConfigured && !pendingApiKey && (
               <button className="text-button" type="button" onClick={clearApiKey} disabled={busy}>清除</button>
             )}
+            <button className="ghost" type="button" onClick={saveAiConfig} disabled={busy}>保存 AI 配置</button>
           </div>
         </div>
         <label>
@@ -470,11 +567,12 @@ export function App() {
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder={aiApiKeyConfigured ? "留空则保留已保存 Key" : "输入后点击上方保存"}
+              placeholder={aiApiKeyConfigured ? "留空则保留已保存 Key" : "输入后保存，或直接生成草稿"}
               autoComplete="off"
             />
           </label>
         </div>
+        {aiProviderIssue && <p className="config-warning">{aiProviderIssue}</p>}
         <label className="profile-field">
           个人简历摘要（只填写真实经历）
           <textarea
