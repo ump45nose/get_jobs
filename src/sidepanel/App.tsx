@@ -574,6 +574,25 @@ export function App() {
         </div>
         {aiProviderIssue && <p className="config-warning">{aiProviderIssue}</p>}
         <label className="profile-field">
+          AI 请求超时（秒，10–600）
+          <input
+            type="number"
+            min={10}
+            max={600}
+            step={10}
+            value={config.ai.timeoutSeconds}
+            onChange={(event) => setConfig({
+              ...config,
+              ai: {
+                ...config.ai,
+                timeoutSeconds: Number.isFinite(event.target.valueAsNumber)
+                  ? event.target.valueAsNumber
+                  : DEFAULT_LIEPIN_CONFIG.ai.timeoutSeconds,
+              },
+            })}
+          />
+        </label>
+        <label className="profile-field">
           个人简历摘要（只填写真实经历）
           <textarea
             value={config.ai.resumeSummary}
