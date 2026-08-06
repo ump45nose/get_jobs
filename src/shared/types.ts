@@ -118,6 +118,12 @@ export interface AppState {
   attempts: DeliveryAttempt[];
 }
 
+/** 配置保存完成后的后台确认结果。 */
+export interface SavedLiepinConfig {
+  config: LiepinConfig;
+  aiApiKeyConfigured: boolean;
+}
+
 /** AI 生成完成后返回给侧边栏的可编辑草稿。 */
 export interface GreetingDraft {
   text: string;
