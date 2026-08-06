@@ -1,6 +1,11 @@
 import { listRecentAttempts, saveDeliveryAttempt } from "./database";
 import { generateGreetingDraft } from "./ai";
-import { DEFAULT_LIEPIN_CONFIG, createIdleTask, normalizeAiTimeoutSeconds } from "../shared/defaults";
+import {
+  DEFAULT_LIEPIN_CONFIG,
+  createIdleTask,
+  normalizeAiTimeoutSeconds,
+  normalizeBatchInterval,
+} from "../shared/defaults";
 import type {
   AppState,
   BackgroundRequest,
@@ -48,6 +53,7 @@ async function getConfig(): Promise<LiepinConfig> {
   const stored = await chrome.storage.local.get(CONFIG_KEY);
   const saved = stored[CONFIG_KEY] as Partial<LiepinConfig> | undefined;
   const savedAi = saved?.ai && typeof saved.ai === "object" ? saved.ai : undefined;
+  const savedBatch = saved?.batch && typeof saved.batch === "object" ? saved.batch : undefined;
   return {
     keywords: Array.isArray(saved?.keywords)
       ? saved.keywords.filter((item): item is string => typeof item === "string")
@@ -68,6 +74,10 @@ async function getConfig(): Promise<LiepinConfig> {
         ? savedAi.sendResume
         : DEFAULT_LIEPIN_CONFIG.ai.sendResume,
     },
+    batch: normalizeBatchInterval(
+      savedBatch?.minIntervalSeconds,
+      savedBatch?.maxIntervalSeconds,
+    ),
   };
 }
 
@@ -173,6 +183,10 @@ async function handleRequest(
             ? request.config.ai.sendResume
             : DEFAULT_LIEPIN_CONFIG.ai.sendResume,
         },
+        batch: normalizeBatchInterval(
+          request.config.batch?.minIntervalSeconds,
+          request.config.batch?.maxIntervalSeconds,
+        ),
       };
       const values: Record<string, unknown> = { [CONFIG_KEY]: config };
       if (request.apiKey?.trim()) {
