@@ -1,6 +1,6 @@
 import { listRecentAttempts, saveDeliveryAttempt } from "./database";
 import { generateGreetingDraft } from "./ai";
-import { DEFAULT_LIEPIN_CONFIG, createIdleTask } from "../shared/defaults";
+import { DEFAULT_LIEPIN_CONFIG, createIdleTask, normalizeAiTimeoutSeconds } from "../shared/defaults";
 import type {
   AppState,
   BackgroundRequest,
@@ -57,6 +57,7 @@ async function getConfig(): Promise<LiepinConfig> {
     ai: {
       baseUrl: typeof savedAi?.baseUrl === "string" ? savedAi.baseUrl : DEFAULT_LIEPIN_CONFIG.ai.baseUrl,
       model: typeof savedAi?.model === "string" ? savedAi.model : DEFAULT_LIEPIN_CONFIG.ai.model,
+      timeoutSeconds: normalizeAiTimeoutSeconds(savedAi?.timeoutSeconds),
       resumeSummary: typeof savedAi?.resumeSummary === "string"
         ? savedAi.resumeSummary
         : DEFAULT_LIEPIN_CONFIG.ai.resumeSummary,
@@ -163,6 +164,7 @@ async function handleRequest(
         ai: {
           baseUrl: request.config.ai.baseUrl.trim(),
           model: request.config.ai.model.trim(),
+          timeoutSeconds: normalizeAiTimeoutSeconds(request.config.ai.timeoutSeconds),
           resumeSummary: request.config.ai.resumeSummary.trim(),
           previewBeforeSend: typeof request.config.ai.previewBeforeSend === "boolean"
             ? request.config.ai.previewBeforeSend

@@ -1,4 +1,5 @@
 import type { LiepinAiConfig, LiepinJobSnapshot } from "../shared/types";
+import { normalizeAiTimeoutSeconds } from "../shared/defaults";
 
 /** OpenAI 兼容 Chat Completions 的最小响应结构。 */
 interface ChatCompletionResponse {
@@ -103,8 +104,9 @@ export async function generateGreetingDraft(
   }
 
   const endpoint = buildChatCompletionsUrl(config.baseUrl);
+  const timeoutSeconds = normalizeAiTimeoutSeconds(config.timeoutSeconds);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1_000);
   try {
     const response = await fetcher(endpoint, {
       method: "POST",
@@ -145,7 +147,7 @@ export async function generateGreetingDraft(
     return validateGreetingDraft(extractGreetingText(data));
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("AI 生成超过 30 秒，已取消本次请求");
+      throw new Error(`AI 生成超过 ${timeoutSeconds} 秒，已取消本次请求`);
     }
     throw error;
   } finally {

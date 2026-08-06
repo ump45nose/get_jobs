@@ -6,10 +6,12 @@ import {
   validateGreetingDraft,
 } from "./ai";
 import type { LiepinAiConfig, LiepinJobSnapshot } from "../shared/types";
+import { normalizeAiTimeoutSeconds } from "../shared/defaults";
 
 const CONFIG: LiepinAiConfig = {
   baseUrl: "https://api.example.com/v1",
   model: "test-model",
+  timeoutSeconds: 120,
   resumeSummary: "5 年 Java 与 AI 应用经验，负责 Agent 和 RAG 项目落地。",
   previewBeforeSend: true,
   sendResume: true,
@@ -23,6 +25,12 @@ const JOB: LiepinJobSnapshot = {
 };
 
 describe("AI 招呼语", () => {
+  it("将超时配置限制在 10 至 600 秒并为旧配置提供默认值", () => {
+    expect(normalizeAiTimeoutSeconds(undefined)).toBe(120);
+    expect(normalizeAiTimeoutSeconds(3)).toBe(10);
+    expect(normalizeAiTimeoutSeconds(900)).toBe(600);
+  });
+
   it("规范化 OpenAI 兼容地址并限制不安全协议", () => {
     expect(buildChatCompletionsUrl("https://api.example.com/v1")).toBe(
       "https://api.example.com/v1/chat/completions",
@@ -63,5 +71,25 @@ describe("AI 招呼语", () => {
     expect(fetcher).toHaveBeenCalledOnce();
     const [, request] = fetcher.mock.calls[0];
     expect(request?.headers).toMatchObject({ Authorization: "Bearer secret" });
+  });
+
+  it("按照配置的秒数取消超时请求", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn((_input: RequestInfo | URL, request?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        request?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      }));
+      const result = expect(generateGreetingDraft(
+        { ...CONFIG, timeoutSeconds: 10 },
+        "secret",
+        JOB,
+        fetcher,
+      )).rejects.toThrow("超过 10 秒");
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await result;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
