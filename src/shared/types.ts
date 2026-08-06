@@ -8,12 +8,19 @@ export interface LiepinAiConfig {
   sendResume: boolean;
 }
 
+/** 当前页顺序投递的随机间隔配置。 */
+export interface LiepinBatchConfig {
+  minIntervalSeconds: number;
+  maxIntervalSeconds: number;
+}
+
 /** 猎聘插件当前支持的配置。 */
 export interface LiepinConfig {
   keywords: string[];
   cityCode: string;
   salary: string;
   ai: LiepinAiConfig;
+  batch: LiepinBatchConfig;
 }
 
 /** 从猎聘岗位卡片中提取的稳定业务字段。 */
