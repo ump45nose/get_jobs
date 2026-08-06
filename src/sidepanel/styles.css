@@ -281,6 +281,41 @@ button.text-button {
   background: #fffaf7;
 }
 
+.batch-panel {
+  border-color: #d7e2e8;
+  background: #fbfdfe;
+}
+
+.batch-progress {
+  display: grid;
+  gap: 5px;
+  margin-top: 11px;
+  padding: 10px 11px;
+  color: #31576d;
+  border: 1px solid #cfe0e8;
+  border-radius: 11px;
+  background: #eef7fa;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.batch-progress span {
+  color: #66737d;
+}
+
+.batch-failed,
+.batch-cancelled {
+  color: #8b2e24;
+  border-color: #efc6c1;
+  background: #fff3f1;
+}
+
+.batch-completed {
+  color: #20633f;
+  border-color: #c9e8d6;
+  background: #effaf4;
+}
+
 .draft-meta {
   display: flex;
   justify-content: space-between;
