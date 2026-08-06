@@ -2,6 +2,7 @@
 export interface LiepinAiConfig {
   baseUrl: string;
   model: string;
+  timeoutSeconds: number;
   resumeSummary: string;
   previewBeforeSend: boolean;
   sendResume: boolean;
