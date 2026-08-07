@@ -9,6 +9,7 @@ import {
   parseLiepinJobCards,
 } from "../shared/liepin-parser";
 import { findLiepinResumeConfirmationButton } from "../shared/liepin-resume-dialog";
+import { containsLiepinRiskSignal } from "../shared/liepin-safety";
 import type {
   BackgroundRequest,
   ContentRequest,
@@ -250,7 +251,7 @@ function detectVerificationEvidence(): string | undefined {
     for (const element of document.querySelectorAll(selector)) {
       if (!isElementVisible(element)) continue;
       const text = normalizeText(element.textContent);
-      if (selector.includes("captcha") || selector.includes("geetest") || /验证码|安全验证|完成验证|操作频繁/.test(text)) {
+      if (selector.includes("captcha") || selector.includes("geetest") || containsLiepinRiskSignal(text)) {
         return text || "检测到平台安全验证";
       }
     }
