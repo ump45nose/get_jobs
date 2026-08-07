@@ -12,6 +12,10 @@ export interface LiepinAiConfig {
 export interface LiepinBatchConfig {
   minIntervalSeconds: number;
   maxIntervalSeconds: number;
+  maxBatchSize: number;
+  maxDailyDeliveries: number;
+  cooldownEvery: number;
+  cooldownSeconds: number;
 }
 
 /** 猎聘插件当前支持的配置。 */
@@ -118,12 +122,29 @@ export interface TaskState {
   message: string;
 }
 
+/** 持久化的投递节奏状态，用于跨侧边栏和后台休眠维持安全配额。 */
+export interface LiepinSafetyState {
+  dayKey: string;
+  dailyDeliveries: number;
+  consecutiveDeliveries: number;
+  cooldownUntil?: string;
+  updatedAt: string;
+}
+
+/** 侧边栏和任务启动前使用的账号安全状态。 */
+export interface LiepinSafetyStatus extends LiepinSafetyState {
+  remainingDailyDeliveries: number;
+  cooldownRemainingSeconds: number;
+  blockedReason?: string;
+}
+
 /** 侧边栏初始化时一次性读取的应用状态。 */
 export interface AppState {
   config: LiepinConfig;
   aiApiKeyConfigured: boolean;
   task: TaskState;
   attempts: DeliveryAttempt[];
+  safety: LiepinSafetyStatus;
 }
 
 /** 配置保存完成后的后台确认结果。 */
@@ -153,6 +174,7 @@ export type ContentRequest =
 export type BackgroundRequest =
   | { type: "OPEN_SIDE_PANEL" }
   | { type: "GET_APP_STATE" }
+  | { type: "GET_LIEPIN_SAFETY_STATUS" }
   | { type: "SAVE_LIEPIN_CONFIG"; config: LiepinConfig; apiKey?: string }
   | { type: "CLEAR_LIEPIN_AI_KEY" }
   | { type: "GENERATE_LIEPIN_GREETING"; job: LiepinJobSnapshot }
