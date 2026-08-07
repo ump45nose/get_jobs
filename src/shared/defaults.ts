@@ -15,10 +15,30 @@ export const MIN_BATCH_INTERVAL_SECONDS = 5;
 /** 当前页顺序投递允许配置的最长随机间隔。 */
 export const MAX_BATCH_INTERVAL_SECONDS = 300;
 
+/** 单批岗位数允许的安全配置范围。 */
+export const MIN_BATCH_SIZE = 1;
+export const MAX_BATCH_SIZE = 20;
+
+/** 本机单日新投递数允许的安全配置范围。 */
+export const MIN_DAILY_DELIVERIES = 1;
+export const MAX_DAILY_DELIVERIES = 50;
+
+/** 连续成功后触发长冷却的计数范围。 */
+export const MIN_COOLDOWN_EVERY = 3;
+export const MAX_COOLDOWN_EVERY = 10;
+
+/** 长冷却允许配置为 1 至 15 分钟。 */
+export const MIN_COOLDOWN_SECONDS = 60;
+export const MAX_COOLDOWN_SECONDS = 900;
+
 /** 默认在两次岗位投递之间随机等待 15 至 45 秒。 */
 export const DEFAULT_BATCH_INTERVAL: LiepinBatchConfig = {
   minIntervalSeconds: 15,
   maxIntervalSeconds: 45,
+  maxBatchSize: 10,
+  maxDailyDeliveries: 30,
+  cooldownEvery: 5,
+  cooldownSeconds: 180,
 };
 
 /**
@@ -42,7 +62,7 @@ export function normalizeAiTimeoutSeconds(value: unknown): number {
 export function normalizeBatchInterval(
   minValue: unknown,
   maxValue: unknown,
-): LiepinBatchConfig {
+): Pick<LiepinBatchConfig, "minIntervalSeconds" | "maxIntervalSeconds"> {
   const normalizeValue = (value: unknown, fallback: number) => {
     if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
     return Math.min(MAX_BATCH_INTERVAL_SECONDS, Math.max(MIN_BATCH_INTERVAL_SECONDS, Math.round(value)));
@@ -56,6 +76,46 @@ export function normalizeBatchInterval(
 }
 
 /**
+ * 规整顺序投递的数量和长冷却护栏，防止表单或旧存储绕过范围限制。
+ *
+ * @param value 待规整的批量配置。
+ * @returns 包含随机间隔、数量配额和长冷却的完整配置。
+ */
+export function normalizeBatchConfig(value: Partial<LiepinBatchConfig> | undefined): LiepinBatchConfig {
+  const normalizeInteger = (candidate: unknown, fallback: number, minimum: number, maximum: number) => {
+    if (typeof candidate !== "number" || !Number.isFinite(candidate)) return fallback;
+    return Math.min(maximum, Math.max(minimum, Math.round(candidate)));
+  };
+  return {
+    ...normalizeBatchInterval(value?.minIntervalSeconds, value?.maxIntervalSeconds),
+    maxBatchSize: normalizeInteger(
+      value?.maxBatchSize,
+      DEFAULT_BATCH_INTERVAL.maxBatchSize,
+      MIN_BATCH_SIZE,
+      MAX_BATCH_SIZE,
+    ),
+    maxDailyDeliveries: normalizeInteger(
+      value?.maxDailyDeliveries,
+      DEFAULT_BATCH_INTERVAL.maxDailyDeliveries,
+      MIN_DAILY_DELIVERIES,
+      MAX_DAILY_DELIVERIES,
+    ),
+    cooldownEvery: normalizeInteger(
+      value?.cooldownEvery,
+      DEFAULT_BATCH_INTERVAL.cooldownEvery,
+      MIN_COOLDOWN_EVERY,
+      MAX_COOLDOWN_EVERY,
+    ),
+    cooldownSeconds: normalizeInteger(
+      value?.cooldownSeconds,
+      DEFAULT_BATCH_INTERVAL.cooldownSeconds,
+      MIN_COOLDOWN_SECONDS,
+      MAX_COOLDOWN_SECONDS,
+    ),
+  };
+}
+
+/**
  * 生成两次岗位投递之间的随机等待毫秒数。
  *
  * @param interval 已规整的秒数区间。
@@ -63,7 +123,7 @@ export function normalizeBatchInterval(
  * @returns 包含区间两端的整数毫秒数。
  */
 export function randomBatchDelayMilliseconds(
-  interval: LiepinBatchConfig,
+  interval: Pick<LiepinBatchConfig, "minIntervalSeconds" | "maxIntervalSeconds">,
   random: () => number = Math.random,
 ): number {
   const normalized = normalizeBatchInterval(interval.minIntervalSeconds, interval.maxIntervalSeconds);
