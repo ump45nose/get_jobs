@@ -4,14 +4,20 @@ import {
   DEFAULT_LIEPIN_CONFIG,
   createIdleTask,
   normalizeAiTimeoutSeconds,
-  normalizeBatchInterval,
+  normalizeBatchConfig,
 } from "../shared/defaults";
+import {
+  getLiepinSafetyStatus as buildLiepinSafetyStatus,
+  recordLiepinDeliverySuccess,
+} from "../shared/liepin-safety";
 import type {
   AppState,
   BackgroundRequest,
   DeliveryAttempt,
   ExtensionResponse,
   LiepinConfig,
+  LiepinSafetyState,
+  LiepinSafetyStatus,
   TaskState,
   TaskStatus,
 } from "../shared/types";
@@ -19,6 +25,7 @@ import type {
 const CONFIG_KEY = "liepinConfig";
 const AI_SECRET_KEY = "liepinAiSecret";
 const TASK_KEY = "liepinTask";
+const SAFETY_KEY = "liepinSafety";
 const WATCHDOG_ALARM = "liepin-task-watchdog";
 
 let taskMutationQueue: Promise<void> = Promise.resolve();
@@ -74,11 +81,34 @@ async function getConfig(): Promise<LiepinConfig> {
         ? savedAi.sendResume
         : DEFAULT_LIEPIN_CONFIG.ai.sendResume,
     },
-    batch: normalizeBatchInterval(
-      savedBatch?.minIntervalSeconds,
-      savedBatch?.maxIntervalSeconds,
-    ),
+    batch: normalizeBatchConfig(savedBatch),
   };
+}
+
+/**
+ * 读取当前配置下的持久化账号安全状态。
+ *
+ * @param config 已规范化的猎聘配置。
+ * @returns 包含每日剩余额度和冷却时间的状态。
+ */
+async function getSafetyStatus(config: LiepinConfig): Promise<LiepinSafetyStatus> {
+  const stored = await chrome.storage.local.get(SAFETY_KEY);
+  const safety = stored[SAFETY_KEY] as Partial<LiepinSafetyState> | undefined;
+  return buildLiepinSafetyStatus(safety, config.batch);
+}
+
+/**
+ * 记录一次明确成功的新投递，`already-contacted` 不消耗额度。
+ *
+ * @param config 当前猎聘配置。
+ * @returns 写入后的安全状态。
+ */
+async function recordSuccessfulDelivery(config: LiepinConfig): Promise<LiepinSafetyState> {
+  const stored = await chrome.storage.local.get(SAFETY_KEY);
+  const safety = stored[SAFETY_KEY] as Partial<LiepinSafetyState> | undefined;
+  const next = recordLiepinDeliverySuccess(safety, config.batch);
+  await chrome.storage.local.set({ [SAFETY_KEY]: next });
+  return next;
 }
 
 /**
@@ -163,8 +193,13 @@ async function handleRequest(
         getTask(),
         listRecentAttempts(),
       ]);
-      const state: AppState = { config, aiApiKeyConfigured: Boolean(apiKey), task, attempts };
+      const safety = await getSafetyStatus(config);
+      const state: AppState = { config, aiApiKeyConfigured: Boolean(apiKey), task, attempts, safety };
       return { ok: true, data: state };
+    }
+    case "GET_LIEPIN_SAFETY_STATUS": {
+      const config = await getConfig();
+      return { ok: true, data: await getSafetyStatus(config) };
     }
     case "SAVE_LIEPIN_CONFIG": {
       const config: LiepinConfig = {
@@ -183,10 +218,7 @@ async function handleRequest(
             ? request.config.ai.sendResume
             : DEFAULT_LIEPIN_CONFIG.ai.sendResume,
         },
-        batch: normalizeBatchInterval(
-          request.config.batch?.minIntervalSeconds,
-          request.config.batch?.maxIntervalSeconds,
-        ),
+        batch: normalizeBatchConfig(request.config.batch),
       };
       const values: Record<string, unknown> = { [CONFIG_KEY]: config };
       if (request.apiKey?.trim()) {
@@ -211,6 +243,11 @@ async function handleRequest(
         const current = await getTask();
         if (current.status === "running" || current.status === "stopping") {
           return { ok: false, error: "已有猎聘任务正在运行" };
+        }
+        const config = await getConfig();
+        const safety = await getSafetyStatus(config);
+        if (safety.blockedReason) {
+          return { ok: false, error: safety.blockedReason };
         }
         const now = new Date().toISOString();
         const task = await saveTask({
@@ -281,6 +318,10 @@ async function handleRequest(
           (current.status !== "running" && current.status !== "stopping")
         ) {
           return { ok: true, data: current };
+        }
+        if (attempt.outcome === "delivered") {
+          // 只有当前活动任务的首次明确成功回执才增加额度，迟到或重复消息不会重复计数。
+          await recordSuccessfulDelivery(await getConfig());
         }
         const task = await saveTask({
           ...current,
