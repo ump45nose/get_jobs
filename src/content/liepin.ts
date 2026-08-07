@@ -8,6 +8,7 @@ import {
   parseLiepinJobCard,
   parseLiepinJobCards,
 } from "../shared/liepin-parser";
+import { findLiepinResumeConfirmationButton } from "../shared/liepin-resume-dialog";
 import type {
   BackgroundRequest,
   ContentRequest,
@@ -483,25 +484,14 @@ async function sendGreetingAndWait(greetingText: string): Promise<DeliveryStepRe
  * @returns 找到并点击确认按钮时返回 true。
  */
 function confirmResumeDialogIfPresent(): boolean {
-  const dialogs = Array.from(document.querySelectorAll<HTMLElement>("[role='dialog'], .ant-im-modal"));
-  for (const dialog of dialogs) {
-    if (!isElementVisible(dialog) || dialog.matches(".im-ui-basic-chat-modal")) continue;
-    const text = normalizeText(dialog.textContent);
-    if (!text.includes("简历")) continue;
-    const buttons = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button")).filter((button) => {
-      const label = normalizeText(button.textContent);
-      return !button.disabled && (label === "确定" || label === "确认发送" || label === "发送简历");
-    });
-    if (buttons.length === 1) {
-      buttons[0].click();
-      return true;
-    }
-  }
-  return false;
+  const button = findLiepinResumeConfirmationButton();
+  if (!button) return false;
+  button.click();
+  return true;
 }
 
 /**
- * 在当前聊天窗口单独发送默认简历并等待简历卡片数量增加。
+ * 在当前聊天窗口单独发送在线/附件简历并等待本人简历卡片数量增加。
  *
  * @returns 简历发送阶段回执。
  */
