@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_LIEPIN_CONFIG,
   createIdleTask,
+  normalizeBatchConfig,
   randomBatchDelayMilliseconds,
 } from "../shared/defaults";
+import { getLiepinSafetyStatus } from "../shared/liepin-safety";
 import type {
   AppState,
   BackgroundRequest,
@@ -15,6 +17,7 @@ import type {
   LiepinConfig,
   LiepinJobSnapshot,
   LiepinPageContext,
+  LiepinSafetyStatus,
   SavedLiepinConfig,
   TaskState,
 } from "../shared/types";
@@ -46,6 +49,9 @@ const EMPTY_CONTEXT: LiepinPageContext = {
   url: "",
   jobs: [],
 };
+
+/** 尚未从后台加载时展示的本机账号安全状态。 */
+const EMPTY_SAFETY = getLiepinSafetyStatus(undefined, DEFAULT_LIEPIN_CONFIG.batch);
 
 /**
  * 向 Service Worker 发送带类型的业务消息。
@@ -204,6 +210,7 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [safety, setSafety] = useState<LiepinSafetyStatus>(EMPTY_SAFETY);
   const batchStopRequested = useRef(false);
   const activeExecution = useRef<{ taskId: string; tabId: number } | null>(null);
 
@@ -219,6 +226,7 @@ export function App() {
     () => context.jobs.filter((job) => !job.buttonText?.includes("继续聊")),
     [context.jobs],
   );
+  const normalizedBatchConfig = useMemo(() => normalizeBatchConfig(config.batch), [config.batch]);
   const pendingApiKey = Boolean(apiKey.trim());
   const aiProviderIssue = useMemo(
     () => getAiProviderIssue(config.ai.baseUrl, config.ai.model),
@@ -248,6 +256,14 @@ export function App() {
     setKeywordsText(state.config.keywords.join("\n"));
     setTask(state.task);
     setAttempts(state.attempts);
+    setSafety(state.safety);
+  }, []);
+
+  /** 从后台刷新持久化每日额度和长冷却状态。 */
+  const refreshSafetyStatus = useCallback(async () => {
+    const next = await sendBackground<LiepinSafetyStatus>({ type: "GET_LIEPIN_SAFETY_STATUS" });
+    setSafety(next);
+    return next;
   }, []);
 
   /** 重新识别当前标签页中的猎聘岗位卡片。 */
@@ -266,14 +282,19 @@ export function App() {
     void loadAppState().catch((error: unknown) => setNotice(error instanceof Error ? error.message : String(error)));
     void inspectPage();
 
-    /** 扩展存储变化时同步后台任务状态，避免依赖轮询。 */
+    /** 扩展存储变化时同步后台任务和安全状态，避免多个侧边栏展示过期额度。 */
     const onStorageChanged = (changes: Record<string, chrome.storage.StorageChange>) => {
       const nextTask = changes.liepinTask?.newValue as TaskState | undefined;
       if (nextTask) setTask(nextTask);
+      if (changes.liepinSafety) {
+        void refreshSafetyStatus().catch((error: unknown) => {
+          setNotice(error instanceof Error ? error.message : String(error));
+        });
+      }
     };
     chrome.storage.onChanged.addListener(onStorageChanged);
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
-  }, [inspectPage, loadAppState]);
+  }, [inspectPage, loadAppState, refreshSafetyStatus]);
 
   /** 从当前表单状态构建待保存配置，确保生成按钮使用尚未手动保存的最新输入。 */
   function buildCurrentConfig(): LiepinConfig {
@@ -530,11 +551,29 @@ export function App() {
       setNotice("当前页没有可顺序投递的新岗位；已显示“继续聊”的岗位会被跳过");
       return;
     }
+    if (safety.cooldownRemainingSeconds > 0) {
+      setNotice(`账号安全冷却中，约 ${safety.cooldownRemainingSeconds} 秒后可继续`);
+      return;
+    }
+    const localRemainingDaily = Math.max(
+      0,
+      normalizedBatchConfig.maxDailyDeliveries - safety.dailyDeliveries,
+    );
+    const queueCount = Math.min(
+      batchCandidates.length,
+      normalizedBatchConfig.maxBatchSize,
+      localRemainingDaily,
+    );
+    if (queueCount <= 0) {
+      setNotice("当前账号安全额度不足，今日不再启动新投递");
+      return;
+    }
+    const guardSkipped = batchCandidates.length - queueCount;
     setBatchProgress({
       status: "confirming",
-      total: batchCandidates.length,
+      total: queueCount,
       completed: 0,
-      message: `将按页面顺序处理 ${batchCandidates.length} 个岗位，跳过 ${knownContactedJobs.length} 个已联系岗位`,
+      message: `将按页面顺序处理 ${queueCount} 个岗位，跳过 ${knownContactedJobs.length} 个已联系岗位${guardSkipped ? `，另有 ${guardSkipped} 个受安全额度限制` : ""}`,
     });
   }
 
@@ -550,9 +589,15 @@ export function App() {
    * @param milliseconds 本次随机得到的等待毫秒数。
    * @param completed 已完成的岗位数。
    * @param total 本批次岗位总数。
+   * @param messagePrefix 等待原因说明。
    * @returns 用户未请求停止时返回 true。
    */
-  async function waitForBatchInterval(milliseconds: number, completed: number, total: number): Promise<boolean> {
+  async function waitForBatchInterval(
+    milliseconds: number,
+    completed: number,
+    total: number,
+    messagePrefix = "随机等待",
+  ): Promise<boolean> {
     const deadline = Date.now() + milliseconds;
     while (Date.now() < deadline) {
       if (batchStopRequested.current) return false;
@@ -562,7 +607,7 @@ export function App() {
         total,
         completed,
         nextDelaySeconds,
-        message: `随机等待 ${nextDelaySeconds} 秒后处理下一个岗位`,
+        message: `${messagePrefix} ${nextDelaySeconds} 秒后处理下一个岗位`,
       });
       // 小步等待保证“停止顺序投递”无需等完整间隔结束。
       await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(250, deadline - Date.now())));
@@ -576,13 +621,22 @@ export function App() {
    * @returns 批次完成、停止或遇到不确定结果时返回。
    */
   async function confirmBatchStart() {
-    const jobs = [...batchCandidates];
+    let jobs: LiepinJobSnapshot[] = [];
     let completedCount = 0;
+    let safeStopReason = "";
     batchStopRequested.current = false;
     setBusy(true);
     try {
       // 批量确认是一次明确授权：每个岗位仍独立生成 AI 文本并等待消息、简历回执。
       const saved = await persistCurrentConfig(true);
+      const initialSafety = await refreshSafetyStatus();
+      if (initialSafety.blockedReason) throw new Error(initialSafety.blockedReason);
+      const allowedCount = Math.min(
+        batchCandidates.length,
+        saved.config.batch.maxBatchSize,
+        initialSafety.remainingDailyDeliveries,
+      );
+      jobs = batchCandidates.slice(0, allowedCount);
       const tab = await getActiveTab();
       const tabHost = tab.url ? new URL(tab.url).hostname : "";
       if (!tab.id || (tabHost !== "liepin.com" && !tabHost.endsWith(".liepin.com"))) {
@@ -630,6 +684,20 @@ export function App() {
         const completed = index + 1;
         completedCount = completed;
         if (completed < jobs.length) {
+          const nextSafety = await refreshSafetyStatus();
+          if (nextSafety.remainingDailyDeliveries <= 0) {
+            safeStopReason = `今日已达到 ${saved.config.batch.maxDailyDeliveries} 个新投递上限，已安全停止`;
+            break;
+          }
+          if (nextSafety.cooldownRemainingSeconds > 0) {
+            const cooled = await waitForBatchInterval(
+              nextSafety.cooldownRemainingSeconds * 1_000,
+              completed,
+              jobs.length,
+              "账号安全冷却",
+            );
+            if (!cooled) break;
+          }
           const delay = randomBatchDelayMilliseconds(saved.config.batch);
           const shouldContinue = await waitForBatchInterval(delay, completed, jobs.length);
           if (!shouldContinue) break;
@@ -645,6 +713,14 @@ export function App() {
           message: "顺序投递已停止，不会继续处理剩余岗位",
         }));
         setNotice("顺序投递已停止");
+      } else if (safeStopReason) {
+        setBatchProgress({
+          status: "completed",
+          total: jobs.length,
+          completed: completedCount,
+          message: safeStopReason,
+        });
+        setNotice(safeStopReason);
       } else {
         setBatchProgress({
           status: "completed",
@@ -919,6 +995,94 @@ export function App() {
               })}
             />
           </label>
+        </div>
+        <div className="field-row">
+          <label>
+            单批最多岗位（1–20）
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={config.batch.maxBatchSize}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  maxBatchSize: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.maxBatchSize,
+                },
+              })}
+            />
+          </label>
+          <label>
+            每日最多新投递（1–50）
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={config.batch.maxDailyDeliveries}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  maxDailyDeliveries: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.maxDailyDeliveries,
+                },
+              })}
+            />
+          </label>
+        </div>
+        <div className="field-row">
+          <label>
+            每成功几个后长冷却（3–10）
+            <input
+              type="number"
+              min={3}
+              max={10}
+              value={config.batch.cooldownEvery}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  cooldownEvery: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.cooldownEvery,
+                },
+              })}
+            />
+          </label>
+          <label>
+            长冷却秒数（60–900）
+            <input
+              type="number"
+              min={60}
+              max={900}
+              step={30}
+              value={config.batch.cooldownSeconds}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  cooldownSeconds: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.cooldownSeconds,
+                },
+              })}
+            />
+          </label>
+        </div>
+        <div className={`safety-summary ${safety.cooldownRemainingSeconds > 0 || normalizedBatchConfig.maxDailyDeliveries <= safety.dailyDeliveries ? "safety-blocked" : ""}`}>
+          <strong>今日新投递 {safety.dailyDeliveries}/{normalizedBatchConfig.maxDailyDeliveries}</strong>
+          <span>
+            剩余 {Math.max(0, normalizedBatchConfig.maxDailyDeliveries - safety.dailyDeliveries)} 个
+            {safety.cooldownRemainingSeconds > 0 ? ` · 冷却剩余约 ${safety.cooldownRemainingSeconds} 秒` : " · 当前未冷却"}
+          </span>
         </div>
         <p className="privacy-note">
           当前识别 {context.jobs.length} 个岗位；可处理 {batchCandidates.length} 个，跳过 {knownContactedJobs.length} 个“继续聊”。
