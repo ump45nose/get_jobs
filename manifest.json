@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Get Jobs - 求职助手",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "在用户当前登录的 Chrome 中提供猎聘与智联的可确认投递闭环。",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "tabs", "alarms"],
