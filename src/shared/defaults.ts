@@ -258,10 +258,8 @@ export const DEFAULT_LIEPIN_CONFIG: LiepinConfig = {
   batch: DEFAULT_BATCH_INTERVAL,
 };
 
-/** 智联新安装默认优先选择唯一附件简历，并复用猎聘已验收的安全节奏。 */
+/** 智联新安装复用猎聘已验收的安全节奏。 */
 export const DEFAULT_ZHILIAN_CONFIG: ZhilianConfig = {
-  resumeMode: "attachment",
-  preferredResumeName: "",
   batch: { ...DEFAULT_BATCH_INTERVAL },
 };
 
@@ -273,10 +271,6 @@ export const DEFAULT_ZHILIAN_CONFIG: ZhilianConfig = {
  */
 export function normalizeZhilianConfig(value: Partial<ZhilianConfig> | undefined): ZhilianConfig {
   return {
-    resumeMode: value?.resumeMode === "online" ? "online" : "attachment",
-    preferredResumeName: typeof value?.preferredResumeName === "string"
-      ? value.preferredResumeName.trim()
-      : "",
     batch: normalizeBatchConfig(value?.batch),
   };
 }
