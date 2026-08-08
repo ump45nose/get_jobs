@@ -31,8 +31,14 @@ interface PendingGreetingDraft {
   job: LiepinJobSnapshot;
   text: string;
   sendResume: boolean;
-  actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">;
+  actionInterval: LiepinDeliveryTiming;
 }
+
+/** 发送给内容脚本的单岗位动作等待与简历回执等待配置。 */
+type LiepinDeliveryTiming = Pick<
+  LiepinBatchConfig,
+  "minActionIntervalSeconds" | "maxActionIntervalSeconds" | "resumeReceiptTimeoutSeconds"
+>;
 
 /** 草稿生成流程独立于持久化投递任务的界面状态。 */
 type DraftActivity = "idle" | "saving" | "generating" | "ready" | "error";
@@ -433,7 +439,7 @@ export function App() {
     greetingText: string,
     tabId: number,
     sendResume: boolean,
-    actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">,
+    actionInterval: LiepinDeliveryTiming,
   ): Promise<DeliveryResult | null> {
     setDraftActivity("idle");
     setBusy(true);
@@ -506,6 +512,7 @@ export function App() {
       const actionInterval = {
         minActionIntervalSeconds: saved.config.batch.minActionIntervalSeconds,
         maxActionIntervalSeconds: saved.config.batch.maxActionIntervalSeconds,
+        resumeReceiptTimeoutSeconds: saved.config.batch.resumeReceiptTimeoutSeconds,
       };
       const draft = await sendBackground<GreetingDraft>({ type: "GENERATE_LIEPIN_GREETING", job });
       if (saved.config.ai.previewBeforeSend) {
@@ -1173,6 +1180,29 @@ export function App() {
               })}
             />
           </label>
+        </div>
+        <div className="field-row">
+          <label>
+            简历回执超时（秒，10–120）
+            <input
+              type="number"
+              min={10}
+              max={120}
+              step={1}
+              value={config.batch.resumeReceiptTimeoutSeconds}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  resumeReceiptTimeoutSeconds: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.resumeReceiptTimeoutSeconds,
+                },
+              })}
+            />
+          </label>
+          <div className="field-help">点击“立即投递”后，等待聊天窗口出现简历卡片的最长时间。</div>
         </div>
         <div className="field-row">
           <label>
