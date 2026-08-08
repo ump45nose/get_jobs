@@ -154,6 +154,9 @@ export function detectZhilianOutcomeFromText(text: string): ZhilianExternalOutco
   if (["滑块验证", "安全验证", "人机验证", "请完成验证", "验证码"].some((item) => normalized.includes(item))) {
     return { outcome: "blocked", evidence: normalized };
   }
+  if (["操作频繁", "访问频繁", "请求频繁", "稍后再试", "账号异常", "风险控制"].some((item) => normalized.includes(item))) {
+    return { outcome: "blocked", evidence: normalized };
+  }
   if (["申请成功", "投递成功"].some((item) => normalized.includes(item))) {
     return { outcome: "success", evidence: normalized };
   }
