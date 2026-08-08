@@ -283,7 +283,7 @@ function isZhilianUrl(url: string | undefined): boolean {
   }
 }
 
-/** 查询本次新开的唯一智联标签页，并让其继续完成简历选择、提交和回执等待。 */
+/** 查询本次新开的唯一智联标签页，并让其继续等待明确申请回执。 */
 async function continueZhilianExternalApplication(
   sender: chrome.runtime.MessageSender,
   knownTabIds: number[],
@@ -600,7 +600,7 @@ async function handleRequest(
           updatedAt: now,
           message: `正在申请：${request.job.jobTitle}`,
         });
-        // 简历选择、动作等待与结果页轮询均计入任务时间，沿用三分钟失联窗口。
+        // 动作等待与结果页轮询均计入任务时间，沿用三分钟失联窗口。
         await chrome.alarms.create(ZHILIAN_WATCHDOG_ALARM, { delayInMinutes: WATCHDOG_DELAY_MINUTES });
         return { ok: true, data: task };
       });
