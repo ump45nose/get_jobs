@@ -8,12 +8,18 @@ import {
   parseZhilianJobCard,
   parseZhilianJobs,
 } from "../shared/zhilian-parser";
+import { randomActionDelayMilliseconds } from "../shared/defaults";
+import {
+  findZhilianResumeDialog,
+  findZhilianSuccessCloseButton,
+} from "../shared/zhilian-resume-dialog";
 import type {
   BackgroundRequest,
   ContentRequest,
   ExtensionResponse,
   ZhilianDeliveryResult,
   ZhilianExternalOutcome,
+  ZhilianConfig,
   ZhilianJobSnapshot,
   ZhilianPageContext,
 } from "../shared/types";
@@ -21,7 +27,6 @@ import type {
 const SUPPORTED_HOST_PATTERN = /(^|\.)zhaopin\.com$/i;
 const APPLY_TEXTS = new Set(["立即投递", "投递简历", "申请职位"]);
 const ALREADY_APPLIED_TEXTS = new Set(["已投递", "已申请"]);
-const RESULT_TIMEOUT_MILLISECONDS = 25_000;
 
 let panelController: EmbeddedPanelController | null = null;
 let recoveryObserver: MutationObserver | null = null;
@@ -130,19 +135,37 @@ function inspectCurrentOutcome(ignoredTexts: ReadonlySet<string> = new Set()): Z
   if (/滑块验证|安全验证|人机验证|请完成验证|验证码/.test(bodyText)) {
     return { outcome: "blocked", evidence: "智联页面要求完成安全验证" };
   }
+  if (/操作频繁|访问频繁|请求频繁|稍后再试|账号异常|风险控制/.test(bodyText)) {
+    return { outcome: "blocked", evidence: "智联页面出现频控或账号风险提示" };
+  }
   if (/请先登录|登录后投递/.test(bodyText)) {
     return { outcome: "failed", evidence: "智联登录状态已失效" };
   }
   return { outcome: "unknown" };
 }
 
-/** 向后台查询由当前标签页打开的智联结果页。 */
-async function inspectExternalOutcome(knownTabIds: number[]): Promise<ZhilianExternalOutcome> {
+/** 让本次新开的智联标签页继续完成简历选择与提交。 */
+async function continueExternalApplication(
+  knownTabIds: number[],
+  taskId: string,
+  config: ZhilianConfig,
+): Promise<ZhilianExternalOutcome> {
   const response = await chrome.runtime.sendMessage({
-    type: "FIND_ZHILIAN_EXTERNAL_OUTCOME",
+    type: "CONTINUE_ZHILIAN_EXTERNAL_APPLICATION",
     knownTabIds,
+    taskId,
+    config,
   } satisfies BackgroundRequest) as ExtensionResponse<ZhilianExternalOutcome>;
   return response.ok && response.data ? response.data : { outcome: "unknown" };
+}
+
+/** 在明确成功后请求后台关闭本次新开的结果标签页。 */
+async function closeExternalSuccessTab(tabId: number): Promise<void> {
+  const response = await chrome.runtime.sendMessage({
+    type: "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB",
+    tabId,
+  } satisfies BackgroundRequest) as ExtensionResponse<unknown>;
+  if (!response.ok) throw new Error(response.error || "智联申请成功，但关闭结果页失败");
 }
 
 /** 点击前记录由当前列表页已经打开的智联结果标签，防止复用旧成功页。 */
@@ -173,8 +196,86 @@ function buildResult(
   return { outcome: "failed", message: "点击后未检测到明确申请结果，请先核对智联投递记录", job };
 }
 
-/** 执行一次用户已确认的智联申请并等待当前页或新标签页回执。 */
-async function applySingleJob(taskId: string, cardKey: string): Promise<ZhilianDeliveryResult> {
+/** 等待一个随机动作间隔，并在停止时抛出可识别错误。 */
+async function waitAction(config: ZhilianConfig): Promise<void> {
+  const completed = await wait(randomActionDelayMilliseconds(config.batch));
+  if (!completed) throw new Error("智联任务已停止");
+}
+
+/** 当前文档内一次简历工作流的临时状态。 */
+interface ZhilianApplicationProgress {
+  resumeSubmitted: boolean;
+}
+
+/**
+ * 推进当前文档内的简历选择、提交、回执与成功关闭动作。
+ *
+ * @param config 保存时冻结的智联配置。
+ * @param ignoredTexts 点击前已存在的回执文本。
+ * @param progress 本次文档内是否已经提交简历。
+ * @returns 出现明确结果时返回；仍在等待时返回 unknown。
+ */
+async function advanceCurrentApplication(
+  config: ZhilianConfig,
+  ignoredTexts: ReadonlySet<string>,
+  progress: ZhilianApplicationProgress,
+): Promise<ZhilianExternalOutcome> {
+  const outcome = inspectCurrentOutcome(ignoredTexts);
+  if (outcome.outcome !== "unknown") {
+    if (outcome.outcome === "success") {
+      // 只在明确成功后等待并关闭成功弹窗；找不到唯一关闭按钮时保留现场。
+      await waitAction(config);
+      findZhilianSuccessCloseButton(document)?.click();
+    }
+    return outcome;
+  }
+  const dialog = findZhilianResumeDialog(document, config);
+  if (!dialog || progress.resumeSubmitted) return { outcome: "unknown" };
+
+  await waitAction(config);
+  const freshDialog = findZhilianResumeDialog(document, config);
+  if (!freshDialog) throw new Error("智联简历弹窗在选择前消失，已停止并保留现场");
+  // 不点击“每次投递默认发送该简历”，只选择本次任务配置的简历。
+  freshDialog.resumeControl.click();
+  await waitAction(config);
+  const confirmedDialog = findZhilianResumeDialog(document, config);
+  if (!confirmedDialog) throw new Error("智联简历弹窗在提交前消失，已停止并保留现场");
+  confirmedDialog.submitButton.click();
+  progress.resumeSubmitted = true;
+  return { outcome: "unknown", evidence: `已提交简历：${confirmedDialog.selectedResumeText}` };
+}
+
+/** 在当前智联文档内完成简历工作流，供新开的岗位页调用。 */
+async function completeCurrentApplication(
+  taskId: string,
+  config: ZhilianConfig,
+  ignoredOutcomeTexts: string[] = [],
+): Promise<ZhilianExternalOutcome> {
+  if (activeTaskId && activeTaskId !== taskId) throw new Error("当前页面已有智联任务正在运行");
+  activeTaskId = taskId;
+  stopRequested = false;
+  const progress: ZhilianApplicationProgress = { resumeSubmitted: false };
+  const deadline = Date.now() + config.batch.resumeReceiptTimeoutSeconds * 1_000;
+  try {
+    while (Date.now() < deadline) {
+      if (stopRequested) return { outcome: "unknown", evidence: "智联任务已停止" };
+      const outcome = await advanceCurrentApplication(config, new Set(ignoredOutcomeTexts), progress);
+      if (outcome.outcome !== "unknown") return outcome;
+      if (!(await wait(250))) return { outcome: "unknown", evidence: "智联任务已停止" };
+    }
+    return { outcome: "unknown", evidence: "等待智联明确回执超时" };
+  } finally {
+    activeTaskId = null;
+    stopRequested = false;
+  }
+}
+
+/** 执行一次智联申请并等待当前页或本次新标签页完成完整简历闭环。 */
+async function applySingleJob(
+  taskId: string,
+  cardKey: string,
+  config: ZhilianConfig,
+): Promise<ZhilianDeliveryResult> {
   if (activeTaskId) throw new Error("当前页面已有智联任务正在运行");
   const target = findJobCard(cardKey);
   if (!target) throw new Error("岗位列表已变化，请重新识别后再投递");
@@ -191,31 +292,42 @@ async function applySingleJob(taskId: string, cardKey: string): Promise<ZhilianD
   activeTaskId = taskId;
   stopRequested = false;
   try {
-    // 用户确认后仍加入短随机稳定等待，避免确认、滚动、点击在同一毫秒完成。
+    // 单次点击授权后，滚动与真正申请之间仍保留随机动作等待。
     target.card.scrollIntoView({ behavior: "smooth", block: "center" });
     const baselineOutcomeTexts = new Set(collectScopedOutcomeTexts());
     const knownExternalTabIds = await listKnownExternalTabs().catch(() => []);
-    const actionDelay = 1_500 + Math.floor(Math.random() * 2_001);
-    if (!(await wait(actionDelay))) {
+    if (!(await wait(randomActionDelayMilliseconds(config.batch)))) {
       return { outcome: "cancelled", message: "任务已在点击前停止", job: target.job };
     }
     button.click();
 
-    const deadline = Date.now() + RESULT_TIMEOUT_MILLISECONDS;
+    const progress: ZhilianApplicationProgress = { resumeSubmitted: false };
+    const deadline = Date.now() + config.batch.resumeReceiptTimeoutSeconds * 1_000;
     while (Date.now() < deadline) {
       if (stopRequested) return { outcome: "cancelled", message: "任务已停止，请核对智联投递记录", job: target.job };
-      const current = inspectCurrentOutcome(baselineOutcomeTexts);
+      const current = await advanceCurrentApplication(config, baselineOutcomeTexts, progress);
       if (current.outcome !== "unknown") return buildResult(target.job, current);
 
       const refreshed = findJobCard(cardKey);
       const refreshedText = refreshed ? (findApplyButton(refreshed.card)?.textContent ?? "").replace(/\s+/g, "").trim() : "";
       if (ALREADY_APPLIED_TEXTS.has(refreshedText)) {
+        // 按钮回执先出现时再等待一个动作间隔，给成功弹窗渲染和关闭留出时间。
+        if (!(await wait(randomActionDelayMilliseconds(config.batch)))) {
+          return { outcome: "cancelled", message: "任务已停止，请核对智联投递记录", job: target.job };
+        }
+        const delayedOutcome = inspectCurrentOutcome(baselineOutcomeTexts);
+        if (delayedOutcome.outcome === "success") findZhilianSuccessCloseButton(document)?.click();
         return buildResult(target.job, { outcome: "success", evidence: `岗位按钮已变为“${refreshedText}”` });
       }
 
-      const external = await inspectExternalOutcome(knownExternalTabIds)
+      const external = await continueExternalApplication(knownExternalTabIds, taskId, config)
         .catch(() => ({ outcome: "unknown" as const }));
-      if (external.outcome !== "unknown") return buildResult(target.job, external);
+      if (external.outcome !== "unknown") {
+        if (external.outcome === "success" && external.tabId !== undefined) {
+          await closeExternalSuccessTab(external.tabId);
+        }
+        return buildResult(target.job, external);
+      }
       await wait(250);
     }
     return buildResult(target.job, { outcome: "unknown" });
@@ -241,13 +353,26 @@ chrome.runtime.onMessage.addListener((request: ContentRequest, _sender, sendResp
     sendResponse({ ok: true, data: inspectCurrentOutcome() } satisfies ExtensionResponse<ZhilianExternalOutcome>);
     return false;
   }
+  if (request.type === "COMPLETE_ZHILIAN_APPLICATION") {
+    void completeCurrentApplication(
+      request.taskId,
+      request.config,
+      request.ignoredOutcomeTexts,
+    )
+      .then((data) => sendResponse({ ok: true, data } satisfies ExtensionResponse<ZhilianExternalOutcome>))
+      .catch((error: unknown) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      } satisfies ExtensionResponse<unknown>));
+    return true;
+  }
   if (request.type === "STOP_ZHILIAN_TASK") {
     if (activeTaskId === request.taskId) stopRequested = true;
     sendResponse({ ok: true, data: { stopped: activeTaskId === request.taskId } } satisfies ExtensionResponse<unknown>);
     return false;
   }
   if (request.type === "APPLY_ZHILIAN_JOB") {
-    void applySingleJob(request.taskId, request.cardKey)
+    void applySingleJob(request.taskId, request.cardKey, request.config)
       .then((data) => sendResponse({ ok: true, data } satisfies ExtensionResponse<ZhilianDeliveryResult>))
       .catch((error: unknown) => sendResponse({
         ok: false,
