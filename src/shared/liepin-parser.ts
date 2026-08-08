@@ -7,7 +7,15 @@ export const LIEPIN_SELECTORS = {
   chatSend: "button.im-ui-basic-send-btn",
   chatResume: ".im-ui-action-button.action-resume",
   sentText: ".im-ui-txt.send .im-ui-txt-content .text",
-  sentResume: ".im-ui-txt.send .im-ui-send-attachment-card",
+  // 猎聘不同账号/版本会使用不同的附件卡片类名，均限定在本人发送消息内避免误识别。
+  sentResume: [
+    ".im-ui-txt.send .im-ui-send-attachment-card",
+    ".im-ui-txt.send [class*='resume-card']",
+    ".im-ui-txt.send [class*='attachment-card']",
+    ".im-ui-txt.send [class*='attachment']",
+    ".im-ui-txt.send [data-type*='resume']",
+    ".im-ui-txt.send [data-type*='attachment']",
+  ].join(", "),
   chatClose: "[aria-label='close']",
   loggedIn: [
     "#header-quick-menu-user-info",
