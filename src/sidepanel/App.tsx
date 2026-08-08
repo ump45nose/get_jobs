@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_LIEPIN_CONFIG,
+  DEFAULT_GREETING_PROMPT_TEMPLATE,
   createIdleTask,
   normalizeBatchConfig,
   randomBatchDelayMilliseconds,
@@ -316,6 +317,9 @@ export function App() {
     if (requireAiCredentials && !next.ai.model.trim()) {
       throw new Error("请先填写 AI 模型名称");
     }
+    if (requireAiCredentials && !next.ai.promptTemplate.trim()) {
+      throw new Error("请先填写 AI 招呼语提示词模板");
+    }
     if (requireAiCredentials && !nextApiKey && !aiApiKeyConfigured) {
       throw new Error("请先填写 API Key；点击生成草稿时会自动保存到本机扩展存储");
     }
@@ -354,7 +358,7 @@ export function App() {
     }
   }
 
-  /** 从 AI 区域独立保存接口、模型、密钥和简历摘要。 */
+  /** 从 AI 区域独立保存接口、模型、密钥、简历摘要和完整提示词。 */
   async function saveAiConfig() {
     setBusy(true);
     setDraftActivity("saving");
@@ -886,6 +890,37 @@ export function App() {
             placeholder="例如：5 年 Java/AI 应用经验，负责过 Agent、RAG、多模型接入……"
           />
         </label>
+        <label className="profile-field prompt-field">
+          <span className="field-label-row">
+            <span>AI 招呼语完整提示词</span>
+            <button
+              className="text-button"
+              type="button"
+              disabled={busy || batchActive}
+              onClick={() => setConfig({
+                ...config,
+                ai: { ...config.ai, promptTemplate: DEFAULT_GREETING_PROMPT_TEMPLATE },
+              })}
+            >
+              恢复默认模板
+            </button>
+          </span>
+          <textarea
+            value={config.ai.promptTemplate}
+            onChange={(event) => setConfig({
+              ...config,
+              ai: { ...config.ai, promptTemplate: event.target.value },
+            })}
+            rows={12}
+            placeholder="输入完整业务提示词，可使用下方变量"
+            spellCheck={false}
+          />
+        </label>
+        <p className="template-help">
+          可用变量：{"{{resumeSummary}}"}、{"{{jobTitle}}"}、{"{{companyName}}"}、{"{{jobArea}}"}、
+          {"{{jobSalary}}"}、{"{{jobEducation}}"}、{"{{jobExperience}}"}、{"{{companyIndustry}}"}、
+          {"{{companyScale}}"}、{"{{hrName}}"}、{"{{hrTitle}}"}。写作内容可完全自定义；150 字与 3 句话发送上限固定生效。
+        </p>
         <div className="toggle-list">
           <label className="toggle-row">
             <input
@@ -910,7 +945,7 @@ export function App() {
             <span>AI 招呼成功后单独发送简历</span>
           </label>
         </div>
-        <p className="privacy-note">简历摘要会发送给你配置的 AI 服务；API Key 仅保存在本机扩展存储，不写入投递历史。</p>
+        <p className="privacy-note">自定义提示词及其岗位/简历变量会发送给你配置的 AI 服务；API Key 仅保存在本机扩展存储，不写入投递历史。</p>
       </section>
 
       {pendingDraft && (
