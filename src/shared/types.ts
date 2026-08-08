@@ -88,6 +88,17 @@ export interface ZhilianPageContext {
   issue?: string;
 }
 
+/** 智联简历弹窗中允许自动选择的简历类型。 */
+export type ZhilianResumeMode = "attachment" | "online";
+
+/** 智联自动投递的简历与安全节奏配置。 */
+export interface ZhilianConfig {
+  resumeMode: ZhilianResumeMode;
+  /** 附件名称可留空；仅当页面只有一个附件时允许自动选择。 */
+  preferredResumeName: string;
+  batch: LiepinBatchConfig;
+}
+
 /** 智联页面对一次申请动作给出的可核验结果。 */
 export type ZhilianOutcome = "delivered" | "already-applied" | "cancelled" | "blocked" | "failed";
 
@@ -199,14 +210,18 @@ export interface ZhilianTaskState {
 
 /** 智联助手初始化时读取的最小应用状态。 */
 export interface ZhilianAppState {
+  config: ZhilianConfig;
   task: ZhilianTaskState;
   attempts: ZhilianDeliveryAttempt[];
+  safety: LiepinSafetyStatus;
 }
 
 /** 跨标签查询到的智联投递回执。 */
 export interface ZhilianExternalOutcome {
   outcome: "success" | "already-applied" | "blocked" | "failed" | "unknown";
   evidence?: string;
+  /** 仅跨标签工作流返回，用于明确成功后关闭本次新开的结果页。 */
+  tabId?: number;
 }
 
 /** 持久化的投递节奏状态，用于跨助手实例和后台休眠维持安全配额。 */
@@ -288,7 +303,13 @@ export type ContentRequest =
   | { type: "STOP_LIEPIN_TASK"; taskId: string }
   | { type: "INSPECT_ZHILIAN" }
   | { type: "INSPECT_ZHILIAN_OUTCOME" }
-  | { type: "APPLY_ZHILIAN_JOB"; taskId: string; cardKey: string }
+  | {
+      type: "COMPLETE_ZHILIAN_APPLICATION";
+      taskId: string;
+      config: ZhilianConfig;
+      ignoredOutcomeTexts?: string[];
+    }
+  | { type: "APPLY_ZHILIAN_JOB"; taskId: string; cardKey: string; config: ZhilianConfig }
   | { type: "STOP_ZHILIAN_TASK"; taskId: string };
 
 /** 发送给 Service Worker 的消息。 */
@@ -307,12 +328,20 @@ export type BackgroundRequest =
   | { type: "RECORD_LIEPIN_ATTEMPT"; taskId: string; result: DeliveryResult }
   | { type: "CONTENT_READY" }
   | { type: "GET_ZHILIAN_APP_STATE" }
+  | { type: "GET_ZHILIAN_SAFETY_STATUS" }
+  | { type: "SAVE_ZHILIAN_CONFIG"; config: ZhilianConfig }
   | { type: "START_ZHILIAN_TASK"; tabId: number; job: ZhilianJobSnapshot }
   | { type: "CANCEL_ZHILIAN_TASK"; taskId: string }
   | { type: "FAIL_ZHILIAN_TASK"; taskId: string; message: string }
   | { type: "RECORD_ZHILIAN_ATTEMPT"; taskId: string; result: ZhilianDeliveryResult }
   | { type: "LIST_ZHILIAN_EXTERNAL_TABS" }
-  | { type: "FIND_ZHILIAN_EXTERNAL_OUTCOME"; knownTabIds: number[] }
+  | {
+      type: "CONTINUE_ZHILIAN_EXTERNAL_APPLICATION";
+      knownTabIds: number[];
+      taskId: string;
+      config: ZhilianConfig;
+    }
+  | { type: "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB"; tabId: number }
   | { type: "ZHILIAN_CONTENT_READY" };
 
 /** 跨插件上下文统一使用的消息响应。 */
