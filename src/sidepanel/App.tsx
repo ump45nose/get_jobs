@@ -15,6 +15,7 @@ import type {
   DeliveryResult,
   ExtensionResponse,
   GreetingDraft,
+  LiepinBatchConfig,
   LiepinConfig,
   LiepinJobSnapshot,
   LiepinPageContext,
@@ -29,6 +30,7 @@ interface PendingGreetingDraft {
   job: LiepinJobSnapshot;
   text: string;
   sendResume: boolean;
+  actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">;
 }
 
 /** 草稿生成流程独立于持久化投递任务的界面状态。 */
@@ -396,6 +398,7 @@ export function App() {
    * @param greetingText 用户确认后的招呼语。
    * @param tabId 用户点击岗位时的原始猎聘标签页。
    * @param sendResume 本次草稿生成时锁定的简历发送配置。
+   * @param actionInterval 单岗位内部不可逆页面动作的随机稳定等待区间。
    * @returns 页面闭环完成时返回结果；插件异常时返回 null。
    */
   async function executeJob(
@@ -403,6 +406,7 @@ export function App() {
     greetingText: string,
     tabId: number,
     sendResume: boolean,
+    actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">,
   ): Promise<DeliveryResult | null> {
     setDraftActivity("idle");
     setBusy(true);
@@ -427,6 +431,7 @@ export function App() {
         cardKey: job.cardKey,
         greetingText,
         sendResume,
+        actionInterval,
       }, tabId);
       setNotice(result.message);
       await loadAppState();
@@ -471,16 +476,20 @@ export function App() {
       setDraftActivity("generating");
       setNotice(`正在生成 AI 招呼：${job.jobTitle}`);
       const sendResume = saved.config.ai.sendResume;
+      const actionInterval = {
+        minActionIntervalSeconds: saved.config.batch.minActionIntervalSeconds,
+        maxActionIntervalSeconds: saved.config.batch.maxActionIntervalSeconds,
+      };
       const draft = await sendBackground<GreetingDraft>({ type: "GENERATE_LIEPIN_GREETING", job });
       if (saved.config.ai.previewBeforeSend) {
-        setPendingDraft({ tabId: tab.id, job, text: draft.text, sendResume });
+        setPendingDraft({ tabId: tab.id, job, text: draft.text, sendResume, actionInterval });
         setDraftActivity("ready");
         setNotice("AI 草稿已生成，请预览或编辑后确认发送");
       } else {
         setNotice("AI 草稿已生成，正在按配置直接执行页面发送");
         setDraftActivity("idle");
         setBusy(false);
-        await executeJob(job, draft.text, tab.id, sendResume);
+        await executeJob(job, draft.text, tab.id, sendResume, actionInterval);
         return;
       }
     } catch (error) {
@@ -502,7 +511,7 @@ export function App() {
     const selected = pendingDraft;
     setPendingDraft(null);
     setDraftActivity("idle");
-    await executeJob(selected.job, text, selected.tabId, selected.sendResume);
+    await executeJob(selected.job, text, selected.tabId, selected.sendResume, selected.actionInterval);
   }
 
   /** 取消尚未产生任何页面发送动作的草稿。 */
@@ -577,7 +586,7 @@ export function App() {
       status: "confirming",
       total: queueCount,
       completed: 0,
-      message: `将按页面顺序处理 ${queueCount} 个岗位，跳过 ${knownContactedJobs.length} 个已联系岗位${guardSkipped ? `，另有 ${guardSkipped} 个受安全额度限制` : ""}`,
+      message: `将按页面顺序处理 ${queueCount} 个岗位；动作间随机等待 ${normalizedBatchConfig.minActionIntervalSeconds}–${normalizedBatchConfig.maxActionIntervalSeconds} 秒，岗位间等待 ${normalizedBatchConfig.minIntervalSeconds}–${normalizedBatchConfig.maxIntervalSeconds} 秒；跳过 ${knownContactedJobs.length} 个已联系岗位${guardSkipped ? `，另有 ${guardSkipped} 个受安全额度限制` : ""}`,
     });
   }
 
@@ -670,7 +679,13 @@ export function App() {
           currentJob: job.jobTitle,
           message: `正在执行第 ${index + 1}/${jobs.length} 个岗位并等待分阶段回执`,
         });
-        const result = await executeJob(job, draft.text, tab.id, saved.config.ai.sendResume);
+        const result = await executeJob(
+          job,
+          draft.text,
+          tab.id,
+          saved.config.ai.sendResume,
+          saved.config.batch,
+        );
         if (batchStopRequested.current) break;
         if (!result || (result.outcome !== "delivered" && result.outcome !== "already-contacted")) {
           const reason = result?.message ?? "插件未取得本岗位的完整结果";
@@ -993,7 +1008,49 @@ export function App() {
         </div>
         <div className="field-row">
           <label>
-            最短间隔（秒）
+            动作间最短等待（秒）
+            <input
+              type="number"
+              min={0.5}
+              max={10}
+              step={0.5}
+              value={config.batch.minActionIntervalSeconds}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  minActionIntervalSeconds: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.minActionIntervalSeconds,
+                },
+              })}
+            />
+          </label>
+          <label>
+            动作间最长等待（秒）
+            <input
+              type="number"
+              min={0.5}
+              max={10}
+              step={0.5}
+              value={config.batch.maxActionIntervalSeconds}
+              disabled={batchActive}
+              onChange={(event) => setConfig({
+                ...config,
+                batch: {
+                  ...config.batch,
+                  maxActionIntervalSeconds: Number.isFinite(event.target.valueAsNumber)
+                    ? event.target.valueAsNumber
+                    : DEFAULT_LIEPIN_CONFIG.batch.maxActionIntervalSeconds,
+                },
+              })}
+            />
+          </label>
+        </div>
+        <div className="field-row">
+          <label>
+            岗位间最短等待（秒）
             <input
               type="number"
               min={5}
@@ -1012,7 +1069,7 @@ export function App() {
             />
           </label>
           <label>
-            最长间隔（秒）
+            岗位间最长等待（秒）
             <input
               type="number"
               min={5}
@@ -1121,7 +1178,7 @@ export function App() {
         </div>
         <p className="privacy-note">
           当前识别 {context.jobs.length} 个岗位；可处理 {batchCandidates.length} 个，跳过 {knownContactedJobs.length} 个“继续聊”。
-          批量模式会在二次确认后逐岗生成 AI 文本并直接发送，不逐岗弹出草稿预览。
+          动作间等待同时用于单岗位和批量投递；批量模式会在二次确认后逐岗生成 AI 文本并直接发送，不逐岗弹出草稿预览。
         </p>
         {batchProgress && (
           <div className={`batch-progress batch-${batchProgress.status}`}>
