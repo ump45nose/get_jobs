@@ -325,7 +325,7 @@ export function ZhilianApp() {
         <div>
           <p className="eyebrow">GET JOBS · ZHILIAN</p>
           <h1>智联投递助手</h1>
-          <p>一次点击完成简历选择、提交、明确回执与成功页关闭。</p>
+          <p>一次点击使用智联默认简历投递，等待明确回执后关闭成功页。</p>
         </div>
         <span className={`status status-${task.status}`}>{statusLabel(task.status)}</span>
       </section>
@@ -340,16 +340,7 @@ export function ZhilianApp() {
       {notice && <p className="notice">{notice}</p>}
 
       <section className="panel">
-        <div className="section-title"><div><span className="eyebrow">简历与节奏</span><h2>智联自动投递配置</h2></div><button className="ghost" type="button" disabled={taskBusy} onClick={() => void saveConfig()}>保存</button></div>
-        <label>简历类型
-          <select value={config.resumeMode} disabled={taskBusy} onChange={(event) => setConfig((current) => ({ ...current, resumeMode: event.target.value as ZhilianConfig["resumeMode"] }))}>
-            <option value="attachment">附件简历（推荐）</option>
-            <option value="online">在线简历</option>
-          </select>
-        </label>
-        <label className="profile-field">附件简历名称（可留空）
-          <input value={config.preferredResumeName} disabled={taskBusy || config.resumeMode !== "attachment"} placeholder="例如：简历-俞玮康.pdf；留空仅允许唯一附件" onChange={(event) => setConfig((current) => ({ ...current, preferredResumeName: event.target.value }))} />
-        </label>
+        <div className="section-title"><div><span className="eyebrow">安全节奏</span><h2>智联自动投递配置</h2></div><button className="ghost" type="button" disabled={taskBusy} onClick={() => void saveConfig()}>保存</button></div>
         <div className="field-row">
           <label>动作最短（秒）<input type="number" min="0.5" max="10" step="0.1" value={config.batch.minActionIntervalSeconds} onChange={(event) => updateBatchNumber("minActionIntervalSeconds", event.target.value)} /></label>
           <label>动作最长（秒）<input type="number" min="0.5" max="10" step="0.1" value={config.batch.maxActionIntervalSeconds} onChange={(event) => updateBatchNumber("maxActionIntervalSeconds", event.target.value)} /></label>
@@ -361,7 +352,7 @@ export function ZhilianApp() {
           <label>连续成功后冷却<input type="number" min="3" max="10" value={config.batch.cooldownEvery} onChange={(event) => updateBatchNumber("cooldownEvery", event.target.value)} /></label>
           <label>长冷却（秒）<input type="number" min="60" max="900" value={config.batch.cooldownSeconds} onChange={(event) => updateBatchNumber("cooldownSeconds", event.target.value)} /></label>
         </div>
-        <p className="privacy-note">不会勾选智联“每次投递默认发送该简历”。多附件无唯一匹配、验证码、频控、上限或未知回执会立即停止并保留现场。</p>
+        <p className="privacy-note">智联需要提前配置平台默认简历。扩展只点击岗位“立即投递”，不会打开或操作简历选择控件；验证码、频控、上限或未知回执会立即停止并保留现场。</p>
       </section>
 
       <section className="panel batch-panel">
