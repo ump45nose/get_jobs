@@ -23,6 +23,16 @@ async function buildExtension() {
     sourcemap: false,
   });
 
+  // 智联使用独立 Content Script，避免站点选择器和任务状态污染猎聘闭环。
+  await esbuild({
+    entryPoints: ["src/content/zhilian.ts"],
+    outfile: "dist/zhilian-content.js",
+    bundle: true,
+    format: "iife",
+    target: "chrome120",
+    sourcemap: false,
+  });
+
   // Service Worker 使用模块模式，便于保持后台代码边界清晰。
   await esbuild({
     entryPoints: ["src/background/index.ts"],
@@ -37,4 +47,3 @@ async function buildExtension() {
 }
 
 await buildExtension();
-
