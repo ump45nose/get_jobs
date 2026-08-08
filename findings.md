@@ -315,3 +315,28 @@ boss-helper-v2（统一宿主）
 - 业务回归风险：中低，只要首期保留猎聘状态机和 React UI，不把它强行改写成 BOSS workflow。
 - 发布/授权风险：中高，必须处理 GET JOBS 非商业许可证与署名，不能沿用纯 MIT 表述。
 - 预计工作量：Chrome 单插件 MVP 约 4–7 个专注开发日并包含一次两平台验收；同时统一 Vue UI、AI Provider 和三浏览器行为通常还需额外 3–5 日。该估计不包含后续智联适配。
+
+## 阶段 27 智联接入启动
+
+- 用户已明确暂停统一插件合并，当前实现目标切回 `get_jobs-extension`。
+- BOSS 继续关闭；智联与猎聘必须使用独立的页面适配器、平台状态和投递记录，避免智联改动破坏已经验收的猎聘闭环。
+- 首先完成智联单岗位、明确回执的业务闭环；只有单岗位稳定后才开放当前页顺序投递。
+- 当前 Manifest 只匹配猎聘域，且只有一个 `content.js`；智联接入需要新增独立 `zhilian-content.js` 构建入口，并把页内 iframe 资源单独开放给智联域，不能让猎聘内容脚本在智联运行。
+- 当前插件名称、描述和 action 文案仍写死“猎聘助手”，阶段 28 需要改成平台中性的 Get Jobs 助手，同时由后台根据当前标签页把工具栏动作路由到对应平台内容脚本。
+- 原 Java 智联实现当前已采用 `div.joblist-box__item`、`button.collect-and-apply__btn` 和 `a-job-apply-workflow` 等选择器，并已改为点击后等待明确结果；这些只能作为候选线索，必须以当前真实智联页面 DOM 验证后才能用于插件。
+- 原 Java 当前成功文案包括“申请成功/投递成功”，风控文案包括“验证码/滑块验证/安全验证/人机验证”，失败文案包括“未设置默认简历/请先完善简历”；插件将沿用“未知即停止且不记成功”的边界。
+- 本机 Browser Relay 服务已成功启动，但 Chrome 端当前没有附加标签页；因此本轮不能依赖已登录页面做 DOM 抽样，选择器实现必须采用多候选、可诊断、未知即停策略，并等待用户随后在智联页面进行只读/单岗位验收。
+- 现有类型、后台存储键、任务状态、数据库记录和 React UI 全部以 `liepin` 命名；若一次性强行泛化会扩大猎聘回归面。智联首期应新增独立类型/Content Script/解析器，后台仅新增明确的智联消息路由，UI 再用平台分支展示。
+- 当前 `scripts/build.mjs` 用 esbuild 把 `src/content/liepin.ts` 单独输出为 `content.js`；可平行增加 `src/content/zhilian.ts -> zhilian-content.js`，无需改变猎聘产物。
+- 现有 `DeliveryResult`、AI 生成和数据库接口都绑定 `LiepinJobSnapshot`/`platform: "liepin"`。首期可把岗位快照抽成可兼容的公共字段并将平台扩为联合类型，但应保持所有猎聘存储键与 ContentRequest 名称不变。
+- 当前 UI 的标签页识别、文案、按钮和批次逻辑高度绑定猎聘。智联第一阶段宜先提供单岗位识别与投递入口；在真实回执未验收前不复制批量按钮。
+- 原 Java 智联闭环并没有 AI 招呼或聊天消息步骤，核心是岗位卡片上的“立即投递”与默认简历申请；因此智联首个可验收闭环应定义为“用户选择岗位 → 点击立即投递 → 等待申请成功/失败/验证/上限回执”，不虚构平台不存在的聊天链路。
+- 原 Java 岗位卡片字段候选为 `a.jobinfo__name`、`p.jobinfo__salary`、`.jobinfo__other-info-item`、`.companyinfo__name`；按钮候选为 `button.collect-and-apply__btn`。仓库没有已保存的 `page.html`，这些选择器尚无当前页面样本佐证。
+- 智联点击后可能在当前页渲染 `.a-job-apply-workflow`，也可能打开新标签页。Content Script 只能直接读当前文档，跨标签结果需要后台按 `openerTabId`/智联域定位新标签并向该标签的智联 Content Script 请求结果。
+- AI 模块只依赖岗位的通用字段，可后续把入参从 `LiepinJobSnapshot` 收窄为公共岗位视图；但智联首期不应为了“复用 AI”改变其真实投递语义。
+- 智联 MVP 使用 iframe 查询参数 `platform=zhilian` 路由独立 React 界面，因此无需重写猎聘 `App.tsx`；两个站点共享抽屉容器和样式，但业务组件、Content Script、任务存储与历史均分离。
+- 跨标签回执只检查 `openerTabId` 等于原岗位列表标签且 URL 属于智联域的标签页，避免读取或误关联用户其它智联标签。
+- 0.4.0 生产产物已确认包含猎聘 `content.js` 与智联 `zhilian-content.js` 两个互斥域入口；智联 Content Script 约 21 KB，未把猎聘约 56 KB 页面状态机打包进去。
+- 静态成功路径没有关闭结果标签页、没有循环点击、没有未知结果重试；唯一不可逆动作是用户二次确认后的一次 `button.click()`。
+- 提交前发现 `package-lock.json` 根版本仍为 0.3.1，属于版本一致性问题，已同步为 0.4.0。
+- 申请结果必须与本次点击建立因果边界：点击前记录当前工作流文本与既有 `openerTabId` 子标签页，点击后忽略完全相同的旧提示和旧结果页，只读取新增/变化证据。
