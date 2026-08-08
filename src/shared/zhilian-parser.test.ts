@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectZhilianLoginState,
+  detectZhilianAppliedPageOutcome,
   detectZhilianOutcomeFromText,
   extractZhilianJobId,
   parseZhilianJobs,
@@ -78,6 +79,22 @@ describe("detectZhilianOutcomeFromText", () => {
     expect(detectZhilianOutcomeFromText("今日投递次数已达上限").outcome).toBe("blocked");
     expect(detectZhilianOutcomeFromText("操作频繁，请稍后再试").outcome).toBe("blocked");
     expect(detectZhilianOutcomeFromText("未设置默认简历").outcome).toBe("failed");
+  });
+});
+
+describe("detectZhilianAppliedPageOutcome", () => {
+  it("读取专用成功页正文中的明确投递结果", () => {
+    expect(detectZhilianAppliedPageOutcome(
+      "https://www.zhaopin.com/job-applied?number=ABC",
+      "恭喜您，投递成功！ 相似职位推荐",
+    ).outcome).toBe("success");
+  });
+
+  it("普通岗位列表页不会用全页文字判定成功", () => {
+    expect(detectZhilianAppliedPageOutcome(
+      "https://www.zhaopin.com/recommend",
+      "某个介绍区域提到投递成功",
+    ).outcome).toBe("unknown");
   });
 });
 
