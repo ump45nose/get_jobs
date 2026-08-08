@@ -50,11 +50,25 @@ describe("猎聘附件简历确认弹窗", () => {
 
   it("存在多个简历确认候选时拒绝自动选择", () => {
     document.body.innerHTML = `
-      <div role="dialog"><p>发送简历</p><button type="button">确认发送</button></div>
       <div role="dialog"><p>选择附件简历</p><button type="button">立即投递</button></div>
+      <div class="ant-modal-content"><p>招聘方将同时收到您的默认在线简历和附件简历</p><button type="button">立即投递</button></div>
     `;
 
     expect(findLiepinResumeConfirmationButton()).toBeUndefined();
+  });
+
+  it("识别没有 role 属性但带 ant-modal 类名的 Portal 弹窗", () => {
+    document.body.innerHTML = `
+      <div class="ant-modal-root">
+        <div class="ant-modal-content">
+          <h2>选择附件简历</h2>
+          <div role="radio" aria-checked="true">简历-俞非康</div>
+          <button type="button" class="ant-im-btn-primary">立即投递</button>
+        </div>
+      </div>
+    `;
+
+    expect(findLiepinResumeConfirmationButton()?.textContent).toBe("立即投递");
   });
 
   it("不把聊天窗口内的简历文字识别为确认弹窗", () => {
