@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BATCH_INTERVAL,
   DEFAULT_LIEPIN_CONFIG,
+  DEFAULT_ZHILIAN_CONFIG,
   normalizeActionInterval,
   normalizeBatchConfig,
   normalizeBatchInterval,
   normalizeResumeReceiptTimeoutSeconds,
+  normalizeZhilianConfig,
   randomActionDelayMilliseconds,
   randomBatchDelayMilliseconds,
 } from "./defaults";
@@ -93,5 +95,18 @@ describe("顺序投递随机间隔", () => {
     expect(normalizeResumeReceiptTimeoutSeconds(999)).toBe(120);
     expect(normalizeResumeReceiptTimeoutSeconds(45.6)).toBe(46);
     expect(normalizeBatchConfig({}).resumeReceiptTimeoutSeconds).toBe(30);
+  });
+
+  it("智联默认附件优先并复用同一组安全边界", () => {
+    expect(DEFAULT_ZHILIAN_CONFIG.resumeMode).toBe("attachment");
+    expect(normalizeZhilianConfig({
+      resumeMode: "online",
+      preferredResumeName: "  简历-A.pdf  ",
+      batch: { ...DEFAULT_BATCH_INTERVAL, maxBatchSize: 999 },
+    })).toMatchObject({
+      resumeMode: "online",
+      preferredResumeName: "简历-A.pdf",
+      batch: { maxBatchSize: 20 },
+    });
   });
 });
