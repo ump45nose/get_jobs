@@ -5,6 +5,9 @@ export interface LiepinAiConfig {
   timeoutSeconds: number;
   resumeSummary: string;
   promptTemplate: string;
+  useFallbackGreeting: boolean;
+  fallbackGreeting: string;
+  detailedLogging: boolean;
   previewBeforeSend: boolean;
   sendResume: boolean;
 }
@@ -159,6 +162,34 @@ export interface SavedLiepinConfig {
 /** AI 生成完成后返回给助手界面的可编辑草稿。 */
 export interface GreetingDraft {
   text: string;
+  source: "ai" | "fallback";
+  warning?: string;
+}
+
+/** 单次 AI POST 请求的脱敏诊断记录。 */
+export interface AiDiagnosticLog {
+  id: string;
+  createdAt: string;
+  phase: "generate" | "compress";
+  endpoint: string;
+  model: string;
+  timeoutSeconds: number;
+  durationMs: number;
+  detailed: boolean;
+  request: {
+    method: "POST";
+    headers: Record<string, string>;
+    messageCharacters: Array<{ role: "system" | "user"; characters: number }>;
+    body?: string;
+  };
+  response?: {
+    status: number;
+    statusText: string;
+    contentType: string;
+    body?: string;
+  };
+  outcome: "success" | "http-error" | "network-error" | "timeout" | "invalid-response";
+  error?: string;
 }
 
 /** 发送给 Content Script 的消息。 */
@@ -181,6 +212,8 @@ export type BackgroundRequest =
   | { type: "GET_LIEPIN_SAFETY_STATUS" }
   | { type: "SAVE_LIEPIN_CONFIG"; config: LiepinConfig; apiKey?: string }
   | { type: "CLEAR_LIEPIN_AI_KEY" }
+  | { type: "GET_LIEPIN_AI_DIAGNOSTICS" }
+  | { type: "CLEAR_LIEPIN_AI_DIAGNOSTICS" }
   | { type: "GENERATE_LIEPIN_GREETING"; job: LiepinJobSnapshot }
   | { type: "START_LIEPIN_TASK"; tabId: number; job: LiepinJobSnapshot }
   | { type: "REQUEST_LIEPIN_STOP"; taskId: string }
