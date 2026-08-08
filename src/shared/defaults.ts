@@ -9,6 +9,25 @@ export const MAX_AI_TIMEOUT_SECONDS = 600;
 /** 本机大模型首次加载可能较慢，因此默认等待两分钟。 */
 export const DEFAULT_AI_TIMEOUT_SECONDS = 120;
 
+/** 新安装与旧配置迁移使用的完整 AI 招呼语提示词模板。 */
+export const DEFAULT_GREETING_PROMPT_TEMPLATE = `你是求职者的首次沟通文案助手。请根据以下真实信息，为当前岗位生成自然、具体、有针对性的中文招呼语。
+
+求职者真实经历摘要：
+{{resumeSummary}}
+
+岗位名称：{{jobTitle}}
+公司：{{companyName}}
+地点：{{jobArea}}
+薪资：{{jobSalary}}
+学历要求：{{jobEducation}}
+经验要求：{{jobExperience}}
+公司行业：{{companyIndustry}}
+公司规模：{{companyScale}}
+招聘者：{{hrName}}
+招聘者职位：{{hrTitle}}
+
+突出一到两个最相关的真实匹配点，并以一个便于继续沟通的具体问题收尾。不得编造技能、年限、学历、项目或业绩。`;
+
 /** 当前页顺序投递允许配置的最短随机间隔。 */
 export const MIN_BATCH_INTERVAL_SECONDS = 5;
 
@@ -142,6 +161,7 @@ export const DEFAULT_LIEPIN_CONFIG: LiepinConfig = {
     model: "",
     timeoutSeconds: DEFAULT_AI_TIMEOUT_SECONDS,
     resumeSummary: "",
+    promptTemplate: DEFAULT_GREETING_PROMPT_TEMPLATE,
     previewBeforeSend: true,
     sendResume: true,
   },
