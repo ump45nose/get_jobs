@@ -197,3 +197,20 @@
 - 由于单岗位内部将新增多段等待，岗位间默认值可从 15–45 秒缩短为 5–15 秒；每日上限、每 5 个长冷却和异常熔断继续保留，不能用缩短岗位间隔绕过安全额度。
 - 原任务看门狗固定为 1 分钟；当用户把动作间隔配置到允许的 10 秒上限时，六段等待叠加页面回执可能超过一分钟并被后台误判失联，因此看门狗需同步放宽到 3 分钟。
 - 简历确认弹窗的动作等待发生在回执轮询内部；回执超时必须额外加上动作最长等待预算，否则配置 10 秒时可能刚点击“立即投递”就立即超时。
+
+## 阶段 23 首页注入式主界面初步评估
+
+- 当前扩展的 Side Panel 由 Manifest `side_panel.default_path`、`sidePanel` 权限和后台 `chrome.sidePanel.open()` 组成；猎聘 Content Script 已经使用 Shadow DOM 注入一个悬浮入口，因此具备把完整 React UI 挂入网页的基础。
+- `boss-helper-v2` 的核心界面不是 Chrome Side Panel，而是在 Content Script 中创建宿主节点、附加开放 Shadow Root、注入独立样式，再把 Vue 应用挂载到 Shadow DOM 容器。
+- 初步看，配置、任务编排、AI 请求和后台持久化无需迁移到页面上下文；可继续通过 `chrome.runtime.sendMessage` 使用现有 Service Worker，只替换 UI 的挂载载体。
+- 当前 React 界面直接调用 `chrome.tabs.query/get/sendMessage`、`chrome.permissions.request` 和 `chrome.storage.onChanged`。注入页面后仍处于 Content Script 的隔离世界，`chrome.runtime` 与存储 API 可用；但 `chrome.tabs`、动态主机权限申请以及“当前标签页”解析不宜由页内 UI 直接承担，需要改为后台消息代理或直接绑定当前 Content Script 所在标签页。
+- 当前构建把 React Side Panel 交给 Vite，把猎聘 Content Script 单独打成 IIFE。若把完整 React UI 注入页面，需要新增一个可被 Content Script 引入的页内 React 入口，并把 CSS 以内联文本或构建产物方式送进 Shadow Root；这属于构建与挂载层改造，不涉及投递状态机重写。
+- `boss-helper-v2` 使用自定义元素管理挂载/卸载，并在断开 DOM 时主动 `app.unmount()`；它同时把弹窗 portal 指向 Shadow Root 内容器，避免弹窗逃逸到网页 DOM。React 版本也应具备显式 unmount 和 Shadow Root 内的弹层容器。
+- 当前 Side Panel 样式把 `:root`、`body` 和全局元素选择器作为隔离前提；迁入网页时不能原样把 CSS 放入 document，必须注入 Shadow Root，并将根背景、最小宽度与滚动容器改为面板宿主范围，否则会污染猎聘页面或出现高度/滚动异常。
+- 页面注入本身不会改变现有投递、AI、简历与回执协议，账号风险基本不因“显示位置”增加；风险主要是前端兼容和误操作。继续使用现有页面控件自动化时，平台风控风险与当前 Side Panel 版本相同。
+- 推荐采用“固定浮层抽屉 + 悬浮按钮开关”，不修改猎聘主内容区宽度和 margin。若模仿 boss-helper 直接插入岗位布局并挤压页面，猎聘聊天抽屉、响应式栅格和 SPA 改版会显著提高布局回归风险。
+- 最低回归方案是在现有 Shadow DOM 宿主中注入固定抽屉，并用仅对猎聘域开放的 `chrome-extension://.../sidepanel.html` iframe 承载现有 React 应用。这样 `chrome.tabs`、`chrome.permissions.request`、存储监听和现有样式都继续运行在扩展页面上下文，避免为纯 Content Script 重写权限与标签页适配层。
+- Manifest 需要把 `sidepanel.html` 及其构建资源声明为仅猎聘匹配的 `web_accessible_resources`；后台插件图标点击改为向当前猎聘 Content Script 发送显示/隐藏消息。完成真实验收后再移除 `sidePanel` 权限、`side_panel` 声明和 `OPEN_SIDE_PANEL` 分支。
+- 注入抽屉建议固定在右侧、独立滚动、可折叠并支持 Esc 关闭；必须设置明确的 `pointer-events` 边界，避免透明宿主遮挡猎聘岗位卡片。不要修改猎聘 `.recommend-result-inner` 一类站点节点的 margin。
+- 现有 Content Script 宿主挂在 `document.documentElement`，猎聘 SPA 的普通路由切换不会替换该根节点；仍应增加宿主丢失后的幂等重挂载和卸载清理，防止站点脚本清理未知节点后入口消失。
+- 风险结论：固定 iframe 抽屉的实现/兼容风险为中低，原生 React 直接挂 Shadow Root 为中等，照搬 boss-helper 的页内插入并挤压主内容为中高；三者都不会自然降低或升高现有自动投递账号风险。
