@@ -82,6 +82,15 @@ export interface DeliveryStepResult {
   evidence?: string;
 }
 
+/** 单岗位页面投递的可审计阶段日志，内容只允许保存脱敏状态和计数。 */
+export interface DeliveryLogEntry {
+  at: string;
+  phase: "task" | "communication" | "greeting" | "resume";
+  event: string;
+  message: string;
+  details?: Record<string, string | number | boolean | null>;
+}
+
 /** 完整投递链路的分阶段回执。 */
 export interface DeliverySteps {
   communication: DeliveryStepResult;
@@ -96,6 +105,8 @@ export interface DeliveryResult {
   job: LiepinJobSnapshot;
   evidence?: string;
   steps?: DeliverySteps;
+  /** 页面动作与平台回执的脱敏时间线，便于分析“需处理”原因。 */
+  logs?: DeliveryLogEntry[];
 }
 
 /** 持久化的投递尝试记录。 */
