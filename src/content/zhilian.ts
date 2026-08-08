@@ -2,6 +2,7 @@ import { mountEmbeddedPanel, type EmbeddedPanelController } from "./embedded-pan
 import {
   ZHILIAN_APPLY_BUTTON_SELECTORS,
   ZHILIAN_OUTCOME_SCOPE_SELECTORS,
+  detectZhilianLoginState,
   detectZhilianOutcomeFromText,
   findZhilianJobCards,
   parseZhilianJobCard,
@@ -62,21 +63,13 @@ async function wait(milliseconds: number): Promise<boolean> {
   return !stopRequested;
 }
 
-/** 判断当前智联页面的登录状态；无法可靠判断时返回 null。 */
-function detectLoginState(): boolean | null {
-  if (document.querySelector("[class*='user-avatar'], [class*='user-info'], [class*='personal-center']")) return true;
-  const loginElement = Array.from(document.querySelectorAll("a, button"))
-    .find((element) => /^(登录|登录\/注册|注册\/登录)$/.test((element.textContent ?? "").trim()));
-  return loginElement ? false : null;
-}
-
 /** 读取当前页岗位列表和基本登录状态。 */
 function inspectPage(): ZhilianPageContext {
   const supported = SUPPORTED_HOST_PATTERN.test(location.hostname);
   const jobs = supported ? parseZhilianJobs(document) : [];
   return {
     supported,
-    loggedIn: supported ? detectLoginState() : null,
+    loggedIn: supported ? detectZhilianLoginState(document) : null,
     url: location.href,
     jobs,
     issue: !supported
