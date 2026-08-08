@@ -34,10 +34,13 @@ describe("猎聘首页注入式主界面", () => {
     const launcher = shadow.querySelector<HTMLButtonElement>(".launcher")!;
     const drawer = shadow.querySelector<HTMLElement>(".drawer")!;
     const iframe = shadow.querySelector<HTMLIFrameElement>("iframe")!;
+    const styleText = shadow.querySelector("style")?.textContent ?? "";
 
     expect(controller.isOpen()).toBe(true);
     expect(drawer.hidden).toBe(false);
     expect(iframe.getAttribute("src")).toBe("chrome-extension://test/sidepanel.html?embedded=1");
+    expect(styleText).toContain("width: min(520px");
+    expect(styleText).toContain("right: min(552px");
 
     launcher.click();
     expect(controller.isOpen()).toBe(false);
