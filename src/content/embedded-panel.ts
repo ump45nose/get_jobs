@@ -6,6 +6,8 @@ export interface EmbeddedPanelOptions {
   documentRef: Document;
   iframeUrl: string;
   initiallyOpen?: boolean;
+  /** 当前站点名称，用于页内入口和无障碍标签；默认保持猎聘兼容文案。 */
+  platformLabel?: string;
 }
 
 /** 页内助手对 Content Script 暴露的最小控制接口。 */
@@ -26,7 +28,7 @@ const mountedControllers = new WeakMap<HTMLElement, EmbeddedPanelController>();
  * @returns 可切换、查询和销毁抽屉的控制器。
  */
 export function mountEmbeddedPanel(options: EmbeddedPanelOptions): EmbeddedPanelController {
-  const { documentRef, iframeUrl, initiallyOpen = true } = options;
+  const { documentRef, iframeUrl, initiallyOpen = true, platformLabel = "猎聘" } = options;
   const existingHost = documentRef.getElementById(EMBEDDED_PANEL_HOST_ID);
   if (existingHost) {
     const existingController = mountedControllers.get(existingHost);
@@ -138,8 +140,8 @@ export function mountEmbeddedPanel(options: EmbeddedPanelOptions): EmbeddedPanel
   const launcher = documentRef.createElement("button");
   launcher.type = "button";
   launcher.className = "launcher";
-  launcher.title = "打开 Get Jobs 猎聘投递助手";
-  launcher.setAttribute("aria-label", "打开 Get Jobs 猎聘投递助手");
+  launcher.title = `打开 Get Jobs ${platformLabel}投递助手`;
+  launcher.setAttribute("aria-label", launcher.title);
   const mark = documentRef.createElement("span");
   mark.className = "mark";
   mark.textContent = "GJ";
@@ -149,12 +151,12 @@ export function mountEmbeddedPanel(options: EmbeddedPanelOptions): EmbeddedPanel
 
   const drawer = documentRef.createElement("aside");
   drawer.className = "drawer";
-  drawer.setAttribute("aria-label", "Get Jobs 猎聘投递助手");
+  drawer.setAttribute("aria-label", `Get Jobs ${platformLabel}投递助手`);
   const header = documentRef.createElement("header");
   header.className = "drawer-header";
   const title = documentRef.createElement("span");
   title.className = "drawer-title";
-  title.textContent = "Get Jobs · 猎聘投递助手";
+  title.textContent = `Get Jobs · ${platformLabel}投递助手`;
   const closeButton = documentRef.createElement("button");
   closeButton.type = "button";
   closeButton.className = "close";
@@ -164,7 +166,7 @@ export function mountEmbeddedPanel(options: EmbeddedPanelOptions): EmbeddedPanel
   header.append(title, closeButton);
 
   const iframe = documentRef.createElement("iframe");
-  iframe.title = "Get Jobs 猎聘投递助手主界面";
+  iframe.title = `Get Jobs ${platformLabel}投递助手主界面`;
   iframe.setAttribute("loading", "eager");
   drawer.append(header, iframe);
   shadow.append(style, launcher, drawer);
@@ -178,7 +180,7 @@ export function mountEmbeddedPanel(options: EmbeddedPanelOptions): EmbeddedPanel
     drawer.hidden = !open;
     launcher.dataset.open = String(open);
     launcher.setAttribute("aria-expanded", String(open));
-    launcher.title = open ? "收起 Get Jobs 猎聘投递助手" : "打开 Get Jobs 猎聘投递助手";
+    launcher.title = open ? `收起 Get Jobs ${platformLabel}投递助手` : `打开 Get Jobs ${platformLabel}投递助手`;
     launcher.setAttribute("aria-label", launcher.title);
     if (open && !iframe.getAttribute("src")) {
       // 只有首次打开时才加载 React 页面，关闭后保留表单和批次内存状态。
