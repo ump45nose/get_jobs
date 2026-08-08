@@ -276,6 +276,31 @@ button.text-button {
   line-height: 1.5;
 }
 
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.field-label-row .text-button {
+  flex: none;
+}
+
+.prompt-field textarea {
+  min-height: 230px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  line-height: 1.55;
+}
+
+.template-help {
+  margin-top: 7px;
+  color: #66737d;
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .draft-panel {
   border-color: #efb18d;
   background: #fffaf7;
