@@ -26,6 +26,7 @@ import {
 import type {
   BackgroundRequest,
   ContentRequest,
+  DeliveryLogEntry,
   DeliveryResult,
   DeliveryStepResult,
   ExtensionResponse,
@@ -84,6 +85,35 @@ type ActionInterval = Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxA
 
 /** 内容脚本执行单岗位投递时使用的动作与简历回执等待配置。 */
 type DeliveryTiming = ActionInterval & Pick<LiepinBatchConfig, "resumeReceiptTimeoutSeconds">;
+
+/** 投递日志允许写入的脱敏字段类型。 */
+type DeliveryLogDetails = Record<string, string | number | boolean | null>;
+
+/** 单岗位投递阶段日志回调。 */
+type DeliveryLogger = (
+  phase: DeliveryLogEntry["phase"],
+  event: string,
+  message: string,
+  details?: DeliveryLogDetails,
+) => void;
+
+/**
+ * 创建单岗位日志写入器，统一时间格式并限制每条日志字段为脱敏值。
+ *
+ * @param logs 当前岗位的日志数组。
+ * @returns 可传给各投递阶段的日志回调。
+ */
+function createDeliveryLogger(logs: DeliveryLogEntry[]): DeliveryLogger {
+  return (phase, event, message, details) => {
+    logs.push({
+      at: new Date().toISOString(),
+      phase,
+      event,
+      message,
+      ...(details ? { details } : {}),
+    });
+  };
+}
 
 /**
  * 在两个页面动作之间执行可被停止请求打断的随机稳定等待。
@@ -250,6 +280,33 @@ function getActiveChatContainer(): HTMLElement | null {
 }
 
 /**
+ * 获取包含猎聘聊天标题栏的证据容器。
+ *
+ * @param chat 当前消息容器。
+ * @returns 优先返回聊天弹窗根节点，避免标题栏位于消息容器外时误判岗位不匹配。
+ */
+function getCommunicationEvidenceContainer(chat: HTMLElement): HTMLElement {
+  return chat.closest<HTMLElement>(".im-ui-basic-chat-modal") ?? chat;
+}
+
+/**
+ * 读取沟通回执的结构化诊断，不保存聊天正文，避免日志泄露招聘者消息。
+ *
+ * @param job 当前待投递岗位。
+ * @returns 当前聊天节点、文本长度和岗位匹配状态。
+ */
+function getCommunicationDiagnostic(job: LiepinJobSnapshot): DeliveryLogDetails {
+  const chat = getActiveChatContainer();
+  const evidenceContainer = chat ? getCommunicationEvidenceContainer(chat) : null;
+  const text = normalizeText(evidenceContainer?.textContent);
+  return {
+    chatFound: Boolean(chat),
+    chatTextCharacters: text.length,
+    jobMatched: Boolean(evidenceContainer && matchLiepinChatToJob(text, job)),
+  };
+}
+
+/**
  * 读取平台明确展示的沟通成功证据。
  *
  * @param job 当前所选岗位。
@@ -258,7 +315,8 @@ function getActiveChatContainer(): HTMLElement | null {
 function detectCommunicationEvidence(job: LiepinJobSnapshot): string | undefined {
   const chat = getActiveChatContainer();
   if (!chat) return undefined;
-  const text = normalizeText(chat.textContent);
+  const evidenceContainer = getCommunicationEvidenceContainer(chat);
+  const text = normalizeText(evidenceContainer.textContent);
   // 使用完整标题，或“核心标题 + 公司”绑定当前窗口，兼容聊天头省略卡片地区后缀。
   if (matchLiepinChatToJob(text, job)) {
     return `猎聘聊天窗口已打开：${job.jobTitle}`;
@@ -270,20 +328,30 @@ function detectCommunicationEvidence(job: LiepinJobSnapshot): string | undefined
  * 点击成功后尽力关闭聊天窗口；关闭失败不改变已经确认的业务结果。
  *
  * @param actionInterval 关闭聊天前使用的随机稳定等待区间。
+ * @param onLog 当前岗位日志回调。
  * @returns 关闭动作结束时返回。
  */
-async function closeChatWindow(actionInterval: ActionInterval): Promise<void> {
-  if (!await waitForActionInterval(actionInterval)) return;
+async function closeChatWindow(actionInterval: ActionInterval, onLog?: DeliveryLogger): Promise<void> {
+  if (!await waitForActionInterval(actionInterval)) {
+    onLog?.("task", "close-cancelled", "关闭聊天窗口前收到停止请求");
+    return;
+  }
   const modal = getActiveChatContainer()?.closest(".im-ui-basic-chat-modal");
   const close = modal?.querySelector<HTMLElement>(
     `${LIEPIN_SELECTORS.chatClose}, img[alt='close'], button.ant-im-modal-close`,
   );
   if (close && isElementVisible(close)) {
+    onLog?.("task", "close-click", "已点击关闭聊天窗口");
     close.click();
     const deadline = Date.now() + 2_000;
     while (getActiveChatContainer() && Date.now() < deadline) {
       await delay(100);
     }
+    onLog?.("task", getActiveChatContainer() ? "close-timeout" : "close-success", getActiveChatContainer()
+      ? "关闭聊天窗口超时，但不影响已确认的投递结果"
+      : "聊天窗口已关闭");
+  } else {
+    onLog?.("task", "close-control-missing", "未找到聊天窗口关闭按钮，但不影响已确认的投递结果");
   }
 }
 
@@ -292,20 +360,30 @@ async function closeChatWindow(actionInterval: ActionInterval): Promise<void> {
  *
  * @param timeoutMilliseconds 最大等待时长。
  * @param job 当前所选岗位，用于绑定聊天窗口。
+ * @param onLog 当前岗位日志回调。
  * @returns 投递业务结果与证据。
  */
 async function waitForCommunicationOutcome(
   timeoutMilliseconds: number,
   job: LiepinJobSnapshot,
+  onLog?: DeliveryLogger,
 ): Promise<{ outcome: DeliveryResult["outcome"]; message: string; evidence?: string }> {
+  const startedAt = Date.now();
+  onLog?.("communication", "wait-start", "开始等待与当前岗位匹配的聊天窗口", {
+    timeoutMilliseconds,
+  });
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     if (stopRequested) {
+      onLog?.("communication", "cancelled", "等待聊天窗口期间收到停止请求");
       return { outcome: "cancelled", message: "用户已停止本次投递" };
     }
 
     const verification = detectVerificationEvidence();
     if (verification) {
+      onLog?.("communication", "verification", "等待聊天窗口期间检测到安全验证", {
+        evidenceCharacters: verification.length,
+      });
       return {
         outcome: "blocked",
         message: "猎聘要求安全验证，任务已停止",
@@ -314,11 +392,16 @@ async function waitForCommunicationOutcome(
     }
 
     if (detectLiepinLogin() === false) {
+      onLog?.("communication", "login-lost", "等待聊天窗口期间登录状态失效");
       return { outcome: "blocked", message: "猎聘登录状态已失效" };
     }
 
     const success = detectCommunicationEvidence(job);
     if (success) {
+      onLog?.("communication", "receipt-success", "已检测到与岗位匹配的聊天窗口", {
+        elapsedMilliseconds: Date.now() - startedAt,
+        ...getCommunicationDiagnostic(job),
+      });
       return {
         outcome: "delivered",
         message: "猎聘已打开本岗位聊天窗口",
@@ -327,6 +410,10 @@ async function waitForCommunicationOutcome(
     }
     await delay(150);
   }
+  onLog?.("communication", "receipt-timeout", "超时未检测到与岗位匹配的聊天窗口", {
+    elapsedMilliseconds: Date.now() - startedAt,
+    ...getCommunicationDiagnostic(job),
+  });
   return {
     outcome: "blocked",
     message: "点击后未检测到与所选岗位匹配的聊天窗口，结果未知，请先核对沟通记录",
@@ -435,6 +522,8 @@ function setControlledTextareaValue(input: HTMLTextAreaElement, value: string): 
  * @param timeoutMessage 超时状态说明。
  * @param timeoutMilliseconds 最大等待时长。
  * @param onPoll 每次检查前执行的可选页面动作。
+ * @param phase 当前投递阶段。
+ * @param onLog 当前岗位日志回调。
  * @returns 独立阶段回执。
  */
 async function waitForStepReceipt(
@@ -443,27 +532,43 @@ async function waitForStepReceipt(
   timeoutMessage: string,
   timeoutMilliseconds = 8_000,
   onPoll?: () => void | Promise<void>,
+  phase: DeliveryLogEntry["phase"] = "task",
+  onLog?: DeliveryLogger,
 ): Promise<DeliveryStepResult> {
+  const startedAt = Date.now();
+  onLog?.(phase, "wait-start", `开始等待${successMessage}回执`, { timeoutMilliseconds });
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     if (stopRequested) {
+      onLog?.(phase, "cancelled", `等待${successMessage}回执期间收到停止请求`);
       return { status: "failed", message: "用户已停止本次投递" };
     }
     const verification = detectVerificationEvidence();
     if (verification) {
+      onLog?.(phase, "verification", `等待${successMessage}回执期间检测到安全验证`, {
+        evidenceCharacters: verification.length,
+      });
       return { status: "failed", message: "猎聘要求安全验证", evidence: verification };
     }
     if (detectLiepinLogin() === false) {
+      onLog?.(phase, "login-lost", `等待${successMessage}回执期间登录状态失效`);
       return { status: "failed", message: "猎聘登录状态已失效" };
     }
     await onPoll?.();
     const evidence = successCheck();
     if (evidence) {
+      onLog?.(phase, "receipt-success", successMessage, {
+        elapsedMilliseconds: Date.now() - startedAt,
+        evidenceCharacters: evidence.length,
+      });
       return { status: "success", message: successMessage, evidence };
     }
     await delay(120);
   }
   // 页面点击已经发生但缺少明确回执时不能断言失败，要求人工核对以避免重复发送。
+  onLog?.(phase, "receipt-timeout", `${timeoutMessage}，结果未知`, {
+    elapsedMilliseconds: Date.now() - startedAt,
+  });
   return { status: "unknown", message: `${timeoutMessage}，结果未知，请先核对当前聊天记录` };
 }
 
@@ -472,29 +577,45 @@ async function waitForStepReceipt(
  *
  * @param greetingText 用户确认后的招呼语。
  * @param actionInterval 聊天建立后和文本写入后的随机稳定等待区间。
+ * @param onLog 当前岗位日志回调。
  * @returns 文本发送阶段回执。
  */
 async function sendGreetingAndWait(
   greetingText: string,
   actionInterval: ActionInterval,
+  onLog?: DeliveryLogger,
 ): Promise<DeliveryStepResult> {
+  const startedAt = Date.now();
+  onLog?.("greeting", "start", "开始写入并发送招呼语", {
+    characters: greetingText.length,
+  });
   if (!await waitForActionInterval(actionInterval)) {
+    onLog?.("greeting", "cancelled", "等待发送招呼语前收到停止请求");
     return { status: "failed", message: "用户已停止本次投递" };
   }
   const initialVerification = detectVerificationEvidence();
   if (initialVerification) {
+    onLog?.("greeting", "verification", "发送招呼语前检测到安全验证", {
+      evidenceCharacters: initialVerification.length,
+    });
     return { status: "failed", message: "猎聘要求安全验证", evidence: initialVerification };
   }
   if (detectLiepinLogin() === false) {
+    onLog?.("greeting", "login-lost", "发送招呼语前登录状态失效");
     return { status: "failed", message: "猎聘登录状态已失效" };
   }
   const chat = getActiveChatContainer();
   if (!chat) {
+    onLog?.("greeting", "chat-missing", "发送招呼语时聊天窗口不存在");
     return { status: "failed", message: "聊天窗口已消失，无法发送 AI 招呼语" };
   }
   const input = chat.querySelector<HTMLTextAreaElement>(LIEPIN_SELECTORS.chatInput);
   let sendButton = chat.querySelector<HTMLButtonElement>(LIEPIN_SELECTORS.chatSend);
   if (!input || !sendButton || !isElementVisible(input) || !isElementVisible(sendButton)) {
+    onLog?.("greeting", "controls-missing", "未找到聊天输入框或发送按钮", {
+      inputFound: Boolean(input),
+      sendButtonFound: Boolean(sendButton),
+    });
     return { status: "failed", message: "未找到猎聘聊天输入框或发送按钮" };
   }
 
@@ -508,24 +629,34 @@ async function sendGreetingAndWait(
     await delay(80);
   }
   if (!sendButton || sendButton.disabled || !isElementVisible(sendButton)) {
+    onLog?.("greeting", "send-disabled", "写入招呼语后发送按钮仍不可用");
     return { status: "failed", message: "写入招呼语后猎聘发送按钮仍不可用" };
   }
 
   if (!await waitForActionInterval(actionInterval)) {
+    onLog?.("greeting", "cancelled", "等待发送招呼语期间收到停止请求");
     return { status: "failed", message: "用户已停止本次投递" };
   }
   const verification = detectVerificationEvidence();
   if (verification) {
+    onLog?.("greeting", "verification", "点击发送招呼语前检测到安全验证", {
+      evidenceCharacters: verification.length,
+    });
     return { status: "failed", message: "猎聘要求安全验证", evidence: verification };
   }
   if (detectLiepinLogin() === false) {
+    onLog?.("greeting", "login-lost", "点击发送招呼语前登录状态失效");
     return { status: "failed", message: "猎聘登录状态已失效" };
   }
   // 等待期间 React 可能替换按钮节点，点击前重新定位当前可见且启用的发送按钮。
   sendButton = getActiveChatContainer()?.querySelector<HTMLButtonElement>(LIEPIN_SELECTORS.chatSend) ?? null;
   if (!sendButton || sendButton.disabled || !isElementVisible(sendButton)) {
+    onLog?.("greeting", "send-disabled", "等待期间发送按钮失效");
     return { status: "failed", message: "等待发送期间猎聘发送按钮已失效" };
   }
+  onLog?.("greeting", "click", "已点击猎聘招呼发送按钮", {
+    elapsedMilliseconds: Date.now() - startedAt,
+  });
   sendButton.click();
   return waitForStepReceipt(
     () => {
@@ -537,6 +668,10 @@ async function sendGreetingAndWait(
     },
     "AI 招呼语已发送",
     "点击发送后未检测到 AI 招呼语回执",
+    8_000,
+    undefined,
+    "greeting",
+    onLog,
   );
 }
 
@@ -578,26 +713,43 @@ async function waitForResumeDialogToClose(timeoutMilliseconds = 3_000): Promise<
  * 在当前聊天窗口单独发送在线/附件简历并等待本人简历卡片数量增加。
  *
  * @param timing 招呼回执后动作等待与简历确认回执等待配置。
+ * @param onLog 当前岗位日志回调。
  * @returns 简历发送阶段回执。
  */
-async function sendResumeAndWait(timing: DeliveryTiming): Promise<DeliveryStepResult> {
+async function sendResumeAndWait(
+  timing: DeliveryTiming,
+  onLog?: DeliveryLogger,
+): Promise<DeliveryStepResult> {
   const actionInterval: ActionInterval = timing;
+  const startedAt = Date.now();
+  onLog?.("resume", "start", "开始打开简历发送入口", {
+    receiptTimeoutSeconds: normalizeResumeReceiptTimeoutSeconds(timing.resumeReceiptTimeoutSeconds),
+  });
   if (!await waitForActionInterval(actionInterval)) {
+    onLog?.("resume", "cancelled", "打开简历发送入口前收到停止请求");
     return { status: "failed", message: "用户已停止本次投递" };
   }
   const verification = detectVerificationEvidence();
   if (verification) {
+    onLog?.("resume", "verification", "打开简历发送入口前检测到安全验证", {
+      evidenceCharacters: verification.length,
+    });
     return { status: "failed", message: "猎聘要求安全验证", evidence: verification };
   }
   if (detectLiepinLogin() === false) {
+    onLog?.("resume", "login-lost", "打开简历发送入口前登录状态失效");
     return { status: "failed", message: "猎聘登录状态已失效" };
   }
   const chat = getActiveChatContainer();
   if (!chat) {
+    onLog?.("resume", "chat-missing", "发送简历时聊天窗口不存在");
     return { status: "failed", message: "聊天窗口已消失，无法发送简历" };
   }
   const existingResumeCards = countSentResumeCards(chat);
   if (existingResumeCards > 0) {
+    onLog?.("resume", "already-present", "当前聊天已有本人简历卡片，跳过重复发送", {
+      cards: existingResumeCards,
+    });
     return {
       status: "success",
       message: "当前聊天已存在本人简历卡片，未重复发送",
@@ -606,13 +758,19 @@ async function sendResumeAndWait(timing: DeliveryTiming): Promise<DeliveryStepRe
   }
   const resumeButton = chat.querySelector<HTMLElement>(LIEPIN_SELECTORS.chatResume);
   if (!resumeButton || !isElementVisible(resumeButton)) {
+    onLog?.("resume", "control-missing", "未找到猎聘发简历入口");
     return { status: "failed", message: "未找到猎聘“发简历”入口" };
   }
 
   const baseline = countSentResumeCards(chat);
+  onLog?.("resume", "click-open", "已点击发简历入口", {
+    baselineCards: baseline,
+    elapsedMilliseconds: Date.now() - startedAt,
+  });
   clickLiepinButton(resumeButton);
   let confirmationClicked = false;
   let confirmationDialogClosed = false;
+  let confirmationDialogObserved = false;
   const receiptTimeout = normalizeResumeReceiptTimeoutSeconds(timing.resumeReceiptTimeoutSeconds) * 1_000;
   const receipt = await waitForStepReceipt(
     () => {
@@ -627,10 +785,20 @@ async function sendResumeAndWait(timing: DeliveryTiming): Promise<DeliveryStepRe
     receiptTimeout,
     // 弹窗可能异步出现；轮询期间仅点击文字明确且唯一的简历确认按钮，并等待关闭后再判断卡片。
     async () => {
+      if (!confirmationDialogObserved && isLiepinResumeConfirmationDialogVisible()) {
+        confirmationDialogObserved = true;
+        onLog?.("resume", "dialog-visible", "已检测到附件简历确认弹窗", {
+          confirmButtonFound: Boolean(findLiepinResumeConfirmationButton()),
+        });
+      }
       if (!confirmationClicked) {
         confirmationClicked = await confirmResumeDialogIfPresent(actionInterval);
         if (confirmationClicked) {
           confirmationDialogClosed = await waitForResumeDialogToClose();
+          onLog?.("resume", "click-confirm", "已点击附件简历确认按钮", {
+            dialogClosed: confirmationDialogClosed,
+            elapsedMilliseconds: Date.now() - startedAt,
+          });
           // 诊断只输出计数与状态，不输出简历正文或接口密钥。
           console.debug("[Get Jobs][Liepin][Resume] 已点击确认", {
             dialogClosed: confirmationDialogClosed,
@@ -639,10 +807,18 @@ async function sendResumeAndWait(timing: DeliveryTiming): Promise<DeliveryStepRe
         }
       }
     },
+    "resume",
+    onLog,
   );
   if (receipt.status === "unknown") {
     // 把脱敏诊断同时放入结果，用户无需打开 DevTools 才能判断卡在哪个阶段。
     const diagnostic = getResumeDeliveryDiagnostic(getActiveChatContainer());
+    onLog?.("resume", "receipt-unknown", "简历回执未确认", {
+      dialogObserved: confirmationDialogObserved,
+      confirmationClicked,
+      dialogClosed: confirmationDialogClosed,
+      diagnostic,
+    });
     return {
       ...receipt,
       message: `${receipt.message}（${diagnostic}）`,
@@ -697,6 +873,20 @@ async function applySingleJob(
   applying = true;
   activeTaskId = taskId;
   stopRequested = false;
+  const logs: DeliveryLogEntry[] = [];
+  const onLog = createDeliveryLogger(logs);
+  const recordAndReturn = async (result: DeliveryResult): Promise<DeliveryResult> => {
+    onLog("task", "complete", result.message, {
+      outcome: result.outcome,
+      logCountBeforeComplete: logs.length,
+    });
+    const persistedResult: DeliveryResult = {
+      ...result,
+      logs: logs.length ? logs.slice() : undefined,
+    };
+    await recordResult(taskId, persistedResult);
+    return persistedResult;
+  };
 
   try {
     let located = findJobCard(cardKey);
@@ -704,9 +894,16 @@ async function applySingleJob(
       throw new Error("页面已更新，找不到所选岗位，请重新识别岗位");
     }
     let { card, job } = located;
+    onLog("task", "start", "开始执行猎聘岗位投递", {
+      jobTitleCharacters: job.jobTitle.length,
+      sendResume,
+    });
 
     const normalizedGreeting = normalizeText(greetingText);
     if (!normalizedGreeting || normalizedGreeting.length > 150) {
+      onLog("task", "validation-failed", "招呼语校验失败，阻止页面操作", {
+        characters: normalizedGreeting.length,
+      });
       const result: DeliveryResult = {
         outcome: "failed",
         message: "AI 招呼语为空或超过 150 字，已阻止页面操作",
@@ -717,18 +914,18 @@ async function applySingleJob(
           resume: skippedStep("未发送简历"),
         },
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
 
     if (detectLiepinLogin() === false) {
+      onLog("task", "login-lost", "开始投递前登录状态失效");
       const result: DeliveryResult = { outcome: "blocked", message: "请先登录猎聘", job };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
 
     // 页面已有聊天窗时无法证明新点击产生了窗口，先要求用户手动关闭以防误判。
     if (getActiveChatContainer()) {
+      onLog("communication", "chat-already-open", "页面已有聊天窗口，拒绝进行无法绑定岗位的点击");
       const result: DeliveryResult = {
         outcome: "blocked",
         message: "页面已有聊天窗口，请先关闭后再投递",
@@ -739,8 +936,7 @@ async function applySingleJob(
           resume: skippedStep("未发送简历"),
         },
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
 
     let target = findChatButton(card);
@@ -754,16 +950,19 @@ async function applySingleJob(
       }
     }
     if (!target) {
+      onLog("communication", "control-missing", "未找到聊一聊或继续聊按钮");
       const result: DeliveryResult = {
         outcome: "failed",
         message: "悬停招聘者区域后仍未找到“聊一聊”或“继续聊”按钮",
         job,
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
 
     if (target.text.includes("继续聊")) {
+      onLog("communication", "already-contacted", "岗位已显示继续聊，跳过重复投递", {
+        buttonTextCharacters: target.text.length,
+      });
       const result: DeliveryResult = {
         outcome: "already-contacted",
         message: "该岗位已显示“继续聊”，记录为此前已联系，不计作本次新投递",
@@ -775,19 +974,21 @@ async function applySingleJob(
           resume: skippedStep("为避免重复简历，未发送简历"),
         },
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
 
     card.scrollIntoView({ behavior: "smooth", block: "center" });
     await waitForActionInterval(actionInterval);
     if (stopRequested) {
+      onLog("communication", "cancelled", "点击沟通按钮前收到停止请求");
       const result: DeliveryResult = { outcome: "cancelled", message: "用户已停止本次投递", job };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
     const verificationBeforeCommunication = detectVerificationEvidence();
     if (verificationBeforeCommunication) {
+      onLog("communication", "verification", "点击沟通按钮前检测到安全验证", {
+        evidenceCharacters: verificationBeforeCommunication.length,
+      });
       const result: DeliveryResult = {
         outcome: "blocked",
         message: "猎聘要求安全验证，未点击沟通按钮",
@@ -799,12 +1000,12 @@ async function applySingleJob(
           resume: skippedStep("未发送简历"),
         },
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
     const refreshedLocated = findJobCard(cardKey);
     const refreshedTarget = refreshedLocated ? findChatButton(refreshedLocated.card) : null;
     if (!refreshedLocated || !refreshedTarget || refreshedTarget.text.includes("继续聊")) {
+      onLog("communication", "state-changed", "等待点击期间岗位沟通按钮状态发生变化");
       const result: DeliveryResult = {
         outcome: "blocked",
         message: "等待点击期间岗位按钮状态发生变化，未继续操作，请重新识别",
@@ -815,16 +1016,18 @@ async function applySingleJob(
           resume: skippedStep("未发送简历"),
         },
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
     card = refreshedLocated.card;
     job = refreshedLocated.job;
     target = refreshedTarget;
 
     // 助手界面操作由用户明确触发；这里只点击所选卡片中的唯一目标按钮。
+    onLog("communication", "click", "已点击岗位沟通按钮", {
+      buttonTextCharacters: target.text.length,
+    });
     target.button.click();
-    const communication = await waitForCommunicationOutcome(8_000, job);
+    const communication = await waitForCommunicationOutcome(8_000, job, onLog);
     const communicationStep: DeliveryStepResult = {
       status: communication.outcome === "delivered"
         ? "success"
@@ -844,11 +1047,10 @@ async function applySingleJob(
           resume: skippedStep("聊天窗口未确认，未发送简历"),
         },
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
 
-    const greeting = await sendGreetingAndWait(normalizedGreeting, actionInterval);
+    const greeting = await sendGreetingAndWait(normalizedGreeting, actionInterval, onLog);
     if (greeting.status !== "success") {
       const result: DeliveryResult = {
         outcome: stopRequested ? "cancelled" : greeting.status === "unknown" ? "blocked" : "failed",
@@ -861,13 +1063,13 @@ async function applySingleJob(
           resume: skippedStep("AI 招呼语未确认成功，未继续发送简历"),
         },
       };
-      await recordResult(taskId, result);
-      return result;
+      return recordAndReturn(result);
     }
 
     const resume = sendResume
-      ? await sendResumeAndWait(actionInterval)
+      ? await sendResumeAndWait(actionInterval, onLog)
       : skippedStep("配置已关闭自动发送简历");
+    if (!sendResume) onLog("resume", "skipped", "配置已关闭自动发送简历");
     const completed = resume.status === "success" || resume.status === "skipped";
     const resumeAlreadyPresent = resume.status === "success" && resume.message.includes("未重复发送");
     const result: DeliveryResult = {
@@ -889,9 +1091,8 @@ async function applySingleJob(
       evidence: [communicationStep.evidence, greeting.evidence, resume.evidence].filter(Boolean).join("；"),
       steps: { communication: communicationStep, greeting, resume },
     };
-    if (result.outcome === "delivered") await closeChatWindow(actionInterval);
-    await recordResult(taskId, result);
-    return result;
+    if (result.outcome === "delivered") await closeChatWindow(actionInterval, onLog);
+    return recordAndReturn(result);
   } finally {
     applying = false;
     activeTaskId = undefined;
