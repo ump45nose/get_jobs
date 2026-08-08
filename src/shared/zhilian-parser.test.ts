@@ -1,6 +1,36 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { detectZhilianOutcomeFromText, extractZhilianJobId, parseZhilianJobs } from "./zhilian-parser";
+import {
+  detectZhilianLoginState,
+  detectZhilianOutcomeFromText,
+  extractZhilianJobId,
+  parseZhilianJobs,
+} from "./zhilian-parser";
+
+describe("detectZhilianLoginState", () => {
+  it("识别真实智联账号头像和账号菜单", () => {
+    document.body.innerHTML = `
+      <header id="right_nav_header" class="home-header">
+        <div class="home-header__c-login">
+          <div class="c-login__top">测试用户<span class="c-login__top__photo"><img class="c-login__top__img" alt="avatar"></span></div>
+          <div>个人中心 我的简历 退出</div>
+          <a>登录</a>
+        </div>
+      </header>`;
+
+    expect(detectZhilianLoginState(document)).toBe(true);
+  });
+
+  it("只在顶部存在明确登录入口且无账号强证据时返回未登录", () => {
+    document.body.innerHTML = `<header class="home-header"><a>登录/注册</a></header>`;
+    expect(detectZhilianLoginState(document)).toBe(false);
+  });
+
+  it("无法取得可靠证据时返回未知", () => {
+    document.body.innerHTML = `<main><a>登录</a></main>`;
+    expect(detectZhilianLoginState(document)).toBe(null);
+  });
+});
 
 describe("parseZhilianJobs", () => {
   it("解析原版智联卡片结构并生成稳定键", () => {
