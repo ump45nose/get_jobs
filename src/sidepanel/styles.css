@@ -219,6 +219,14 @@ textarea:focus {
   min-width: 0;
 }
 
+.field-help {
+  align-self: end;
+  color: #7a8790;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .profile-field {
   margin-top: 10px;
 }
