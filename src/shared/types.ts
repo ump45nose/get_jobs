@@ -18,6 +18,8 @@ export interface LiepinBatchConfig {
   maxIntervalSeconds: number;
   minActionIntervalSeconds: number;
   maxActionIntervalSeconds: number;
+  /** 点击确认发送简历后，等待聊天回执的最长时间。 */
+  resumeReceiptTimeoutSeconds: number;
   maxBatchSize: number;
   maxDailyDeliveries: number;
   cooldownEvery: number;
@@ -202,7 +204,7 @@ export type ContentRequest =
       cardKey: string;
       greetingText: string;
       sendResume: boolean;
-      actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">;
+      actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds" | "resumeReceiptTimeoutSeconds">;
     }
   | { type: "STOP_LIEPIN_TASK"; taskId: string };
 
