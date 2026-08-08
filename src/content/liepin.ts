@@ -11,6 +11,11 @@ import {
 import { findLiepinResumeConfirmationButton } from "../shared/liepin-resume-dialog";
 import { containsLiepinRiskSignal } from "../shared/liepin-safety";
 import { normalizeActionInterval, randomActionDelayMilliseconds } from "../shared/defaults";
+import {
+  EMBEDDED_PANEL_HOST_ID,
+  mountEmbeddedPanel,
+  type EmbeddedPanelController,
+} from "./embedded-panel";
 import type {
   BackgroundRequest,
   ContentRequest,
@@ -24,94 +29,37 @@ import type {
 let stopRequested = false;
 let applying = false;
 let activeTaskId: string | undefined;
-const LAUNCHER_HOST_ID = "get-jobs-extension-launcher";
+let embeddedPanel: EmbeddedPanelController | undefined;
+let panelRecoveryObserver: MutationObserver | undefined;
 
 /**
- * 在猎聘页面注入隔离样式的悬浮入口，解决工具栏图标未固定时无法发现插件的问题。
+ * 在猎聘页面挂载固定抽屉，复用扩展页面展示完整 React 主界面。
  *
- * @returns 悬浮入口存在或创建完成时返回。
+ * @returns 抽屉存在或创建完成时返回。
  */
-function mountPageLauncher(): void {
-  if (document.getElementById(LAUNCHER_HOST_ID)) {
-    return;
-  }
-
-  const host = document.createElement("div");
-  host.id = LAUNCHER_HOST_ID;
-  const shadow = host.attachShadow({ mode: "open" });
-  const style = document.createElement("style");
-  style.textContent = `
-    :host { all: initial; }
-    button {
-      position: fixed;
-      right: 76px;
-      bottom: 28px;
-      z-index: 2147483646;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      min-height: 44px;
-      padding: 0 15px 0 10px;
-      border: 1px solid rgba(255, 255, 255, 0.42);
-      border-radius: 999px;
-      color: #fff;
-      background: linear-gradient(135deg, #ff7629, #e85a18);
-      box-shadow: 0 10px 28px rgba(154, 62, 18, 0.32);
-      font: 700 13px/1 system-ui, "Microsoft YaHei", sans-serif;
-      letter-spacing: .01em;
-      cursor: pointer;
-      transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
-    }
-    button:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 13px 32px rgba(154, 62, 18, 0.4);
-    }
-    button:focus-visible {
-      outline: 3px solid rgba(255, 118, 41, 0.28);
-      outline-offset: 3px;
-    }
-    button:disabled { cursor: wait; opacity: .72; }
-    .mark {
-      display: grid;
-      width: 27px;
-      height: 27px;
-      place-items: center;
-      border-radius: 50%;
-      color: #e85a18;
-      background: #fff;
-      font-size: 12px;
-      font-weight: 900;
-    }
-  `;
-
-  const button = document.createElement("button");
-  button.type = "button";
-  button.title = "打开 Get Jobs 猎聘投递助手";
-  button.setAttribute("aria-label", "打开 Get Jobs 猎聘投递助手");
-  button.innerHTML = '<span class="mark">GJ</span><span class="text">Get Jobs 助手</span>';
-  button.addEventListener("click", async () => {
-    const label = button.querySelector<HTMLElement>(".text");
-    button.disabled = true;
-    if (label) label.textContent = "正在打开…";
-    try {
-      const response = (await chrome.runtime.sendMessage({
-        type: "OPEN_SIDE_PANEL",
-      } satisfies BackgroundRequest)) as ExtensionResponse<{ opened: boolean }>;
-      if (!response.ok) {
-        throw new Error(response.error || "侧边栏打开失败");
-      }
-      if (label) label.textContent = "Get Jobs 助手";
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      button.title = `${message}；也可以点击 Chrome 工具栏中的插件图标`;
-      if (label) label.textContent = "打开失败，重试";
-    } finally {
-      button.disabled = false;
-    }
+function ensureEmbeddedPanel(): EmbeddedPanelController {
+  if (embeddedPanel?.host.isConnected) return embeddedPanel;
+  embeddedPanel?.destroy();
+  embeddedPanel = mountEmbeddedPanel({
+    documentRef: document,
+    iframeUrl: chrome.runtime.getURL("sidepanel.html?embedded=1"),
   });
+  return embeddedPanel;
+}
 
-  shadow.append(style, button);
-  document.documentElement.append(host);
+/**
+ * 监听站点对根节点的清理并幂等恢复助手宿主，避免 SPA 更新后入口消失。
+ *
+ * @returns 观察器启动完成时返回。
+ */
+function startEmbeddedPanelRecovery(): void {
+  ensureEmbeddedPanel();
+  panelRecoveryObserver?.disconnect();
+  panelRecoveryObserver = new MutationObserver(() => {
+    if (!document.getElementById(EMBEDDED_PANEL_HOST_ID)) ensureEmbeddedPanel();
+  });
+  // 宿主是 documentElement 的直接子节点，只观察该层可避免监听猎聘大量业务 DOM 变化。
+  panelRecoveryObserver.observe(document.documentElement, { childList: true });
 }
 
 /**
@@ -146,7 +94,7 @@ async function waitForActionInterval(interval: ActionInterval): Promise<boolean>
 /**
  * 在页面重新渲染后重新定位用户选中的岗位卡片。
  *
- * @param cardKey 侧边栏识别时生成的卡片键。
+ * @param cardKey 助手界面识别时生成的卡片键。
  * @returns 卡片元素与最新快照。
  */
 function findJobCard(cardKey: string): { card: Element; job: LiepinJobSnapshot } | null {
@@ -783,7 +731,7 @@ async function applySingleJob(
     job = refreshedLocated.job;
     target = refreshedTarget;
 
-    // 侧边栏操作由用户明确触发；这里只点击所选卡片中的唯一目标按钮。
+    // 助手界面操作由用户明确触发；这里只点击所选卡片中的唯一目标按钮。
     target.button.click();
     const communication = await waitForCommunicationOutcome(8_000, job);
     const communicationStep: DeliveryStepResult = {
@@ -860,6 +808,11 @@ async function applySingleJob(
 }
 
 chrome.runtime.onMessage.addListener((request: ContentRequest, _sender, sendResponse) => {
+  if (request.type === "TOGGLE_EMBEDDED_PANEL") {
+    const open = ensureEmbeddedPanel().toggle();
+    sendResponse({ ok: true, data: { open } } satisfies ExtensionResponse<unknown>);
+    return false;
+  }
   if (request.type === "INSPECT_LIEPIN") {
     sendResponse({ ok: true, data: inspectLiepinPage() } satisfies ExtensionResponse<unknown>);
     return false;
@@ -893,7 +846,7 @@ chrome.runtime.onMessage.addListener((request: ContentRequest, _sender, sendResp
   return false;
 });
 
-mountPageLauncher();
+startEmbeddedPanelRecovery();
 
 // 通知后台页面脚本已重新装载；若旧任务仍在运行，后台会安全中止而不是重复点击。
 void chrome.runtime.sendMessage({ type: "CONTENT_READY" } satisfies BackgroundRequest).catch(() => undefined);
