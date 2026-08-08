@@ -27,6 +27,8 @@ const AI_SECRET_KEY = "liepinAiSecret";
 const TASK_KEY = "liepinTask";
 const SAFETY_KEY = "liepinSafety";
 const WATCHDOG_ALARM = "liepin-task-watchdog";
+/** 动作间隔最高可配置 10 秒，完整页面闭环最长允许三分钟后再判定失联。 */
+const WATCHDOG_DELAY_MINUTES = 3;
 
 let taskMutationQueue: Promise<void> = Promise.resolve();
 
@@ -266,8 +268,8 @@ async function handleRequest(
           updatedAt: now,
           message: `正在投递：${request.job.jobTitle}`,
         });
-        // 单岗位正常应在数秒内结束；一分钟后仍运行则视为消息链路失联。
-        await chrome.alarms.create(WATCHDOG_ALARM, { delayInMinutes: 1 });
+        // 随机动作等待和平台回执轮询均计入任务时间，超过三分钟才视为消息链路失联。
+        await chrome.alarms.create(WATCHDOG_ALARM, { delayInMinutes: WATCHDOG_DELAY_MINUTES });
         return { ok: true, data: task };
       });
     }
