@@ -206,6 +206,27 @@ function stepStatusLabel(status: NonNullable<DeliveryAttempt["steps"]>["communic
   return labels[status];
 }
 
+/** 将投递日志阶段映射为面板中的中文标签。 */
+function deliveryLogPhaseLabel(phase: NonNullable<DeliveryAttempt["logs"]>[number]["phase"]): string {
+  const labels = {
+    task: "任务",
+    communication: "沟通",
+    greeting: "招呼",
+    resume: "简历",
+  } as const;
+  return labels[phase];
+}
+
+/** 将脱敏日志详情格式化为单行文本，便于快速复制和人工比对。 */
+function deliveryLogDetailsText(
+  details: NonNullable<DeliveryAttempt["logs"]>[number]["details"],
+): string {
+  if (!details) return "";
+  return Object.entries(details)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" · ");
+}
+
 /** 猎聘插件页内抽屉主界面。 */
 export function App() {
   const [config, setConfig] = useState<LiepinConfig>(DEFAULT_LIEPIN_CONFIG);
@@ -422,6 +443,26 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** 将本机保存的猎聘投递结果和脱敏阶段日志导出为 JSON，便于后续统计和调优。 */
+  function exportDeliveryLogs() {
+    if (!attempts.length) {
+      setNotice("暂无可导出的投递日志");
+      return;
+    }
+    const payload = JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      platform: "liepin",
+      attempts,
+    }, null, 2);
+    const url = URL.createObjectURL(new Blob([payload], { type: "application/json;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `get-jobs-liepin-delivery-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setNotice(`已导出 ${attempts.length} 条猎聘投递日志`);
   }
 
   /**
@@ -1353,6 +1394,9 @@ export function App() {
             <span className="label">本机记录</span>
             <h2>最近投递结果</h2>
           </div>
+          <button className="ghost" type="button" onClick={exportDeliveryLogs} disabled={!attempts.length || busy}>
+            导出日志
+          </button>
         </div>
         <div className="attempt-list">
           {attempts.map((attempt) => (
@@ -1361,16 +1405,34 @@ export function App() {
                 <div>
                   <strong>{attempt.job.jobTitle}</strong>
                   <p>{attempt.job.compName || "未知公司"}</p>
+                  <small>{attempt.message}</small>
+                  {attempt.evidence && <small>证据：{attempt.evidence}</small>}
                 </div>
                 <span className={`outcome outcome-${attempt.outcome}`}>{outcomeLabel(attempt.outcome)}</span>
               </article>
-            {attempt.steps && (
-              <div className="step-summary">
-                <span>沟通：{stepStatusLabel(attempt.steps.communication.status)}</span>
-                <span>招呼：{attempt.steps.greeting ? stepStatusLabel(attempt.steps.greeting.status) : "-"}</span>
-                <span>简历：{attempt.steps.resume ? stepStatusLabel(attempt.steps.resume.status) : "-"}</span>
-              </div>
-            )}
+              {attempt.steps && (
+                <div className="step-summary">
+                  <span>沟通：{stepStatusLabel(attempt.steps.communication.status)}</span>
+                  <span>招呼：{attempt.steps.greeting ? stepStatusLabel(attempt.steps.greeting.status) : "-"}</span>
+                  <span>简历：{attempt.steps.resume ? stepStatusLabel(attempt.steps.resume.status) : "-"}</span>
+                </div>
+              )}
+              {attempt.logs?.length ? (
+                <details className="delivery-log">
+                  <summary>查看投递日志（{attempt.logs.length} 条）</summary>
+                  <div className="delivery-log-list">
+                    {attempt.logs.map((entry, index) => (
+                      <div className="delivery-log-entry" key={`${entry.at}-${entry.event}-${index}`}>
+                        <strong>{deliveryLogPhaseLabel(entry.phase)} · {entry.message}</strong>
+                        <span>{new Date(entry.at).toLocaleString()} · {entry.event}</span>
+                        {entry.details && <small>{deliveryLogDetailsText(entry.details)}</small>}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : (
+                <small className="delivery-log-empty">该记录为旧版本结果，暂无阶段日志。</small>
+              )}
             </div>
           ))}
           {!attempts.length && <p className="empty">暂无投递记录。</p>}
