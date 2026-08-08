@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BATCH_INTERVAL,
+  normalizeActionInterval,
   normalizeBatchConfig,
   normalizeBatchInterval,
+  randomActionDelayMilliseconds,
   randomBatchDelayMilliseconds,
 } from "./defaults";
 
@@ -28,10 +30,37 @@ describe("顺序投递随机间隔", () => {
     expect(randomBatchDelayMilliseconds(interval, () => 0.999999)).toBe(45_000);
   });
 
+  it("规整并生成单岗位内部动作随机等待", () => {
+    expect(normalizeActionInterval(8, 0.1)).toEqual({
+      minActionIntervalSeconds: 0.5,
+      maxActionIntervalSeconds: 8,
+    });
+    const interval = { minActionIntervalSeconds: 1.5, maxActionIntervalSeconds: 3.5 };
+    expect(randomActionDelayMilliseconds(interval, () => 0)).toBe(1_500);
+    expect(randomActionDelayMilliseconds(interval, () => 0.999999)).toBe(3_500);
+  });
+
+  it("把缺少动作配置的旧默认岗位间隔迁移为新默认值", () => {
+    const migrated = normalizeBatchConfig({
+      minIntervalSeconds: 15,
+      maxIntervalSeconds: 45,
+      maxBatchSize: 10,
+      maxDailyDeliveries: 30,
+      cooldownEvery: 5,
+      cooldownSeconds: 180,
+    });
+    expect(migrated.minIntervalSeconds).toBe(5);
+    expect(migrated.maxIntervalSeconds).toBe(15);
+    expect(migrated.minActionIntervalSeconds).toBe(1.5);
+    expect(migrated.maxActionIntervalSeconds).toBe(3.5);
+  });
+
   it("规整批次、每日额度和长冷却护栏", () => {
     expect(normalizeBatchConfig({
       minIntervalSeconds: 20,
       maxIntervalSeconds: 40,
+      minActionIntervalSeconds: 99,
+      maxActionIntervalSeconds: 0,
       maxBatchSize: 99,
       maxDailyDeliveries: 0,
       cooldownEvery: 1,
@@ -39,6 +68,8 @@ describe("顺序投递随机间隔", () => {
     })).toEqual({
       minIntervalSeconds: 20,
       maxIntervalSeconds: 40,
+      minActionIntervalSeconds: 0.5,
+      maxActionIntervalSeconds: 10,
       maxBatchSize: 20,
       maxDailyDeliveries: 1,
       cooldownEvery: 3,
