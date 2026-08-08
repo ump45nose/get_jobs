@@ -28,6 +28,34 @@ function normalizeText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * 依据智联顶部账号区判断登录状态。
+ *
+ * @param root 当前智联文档或测试容器。
+ * @returns 存在账号强证据时返回 true，仅存在明确登录入口时返回 false，否则返回 null。
+ */
+export function detectZhilianLoginState(root: ParentNode): boolean | null {
+  const accountRoot = root.querySelector(".home-header__c-login");
+  if (accountRoot) {
+    const accountText = normalizeText(accountRoot.textContent);
+    const accountTopText = normalizeText(accountRoot.querySelector(".c-login__top")?.textContent);
+    const hasAvatar = Boolean(accountRoot.querySelector("img.c-login__top__img, .c-login__top__photo img, img[alt='avatar']"));
+    const hasAccountMenu = accountText.includes("个人中心")
+      && accountText.includes("我的简历")
+      && accountText.includes("退出");
+    const hasNamedAccount = Boolean(accountTopText)
+      && !/^(登录|登录\/注册|注册\/登录)$/.test(accountTopText);
+    // 头像+账号名或完整账号菜单都属于已登录强证据，优先级高于隐藏登录入口。
+    if ((hasAvatar && hasNamedAccount) || hasAccountMenu) return true;
+  }
+
+  const headerRoot = root.querySelector("#right_nav_header, header.home-header, .home-header");
+  if (!headerRoot) return null;
+  const loginElement = Array.from(headerRoot.querySelectorAll("a, button"))
+    .find((element) => /^(登录|登录\/注册|注册\/登录)$/.test(normalizeText(element.textContent)));
+  return loginElement ? false : null;
+}
+
 /** 从链接中提取智联岗位 ID；无法识别时返回空值。 */
 export function extractZhilianJobId(link: string | undefined): string | undefined {
   if (!link) return undefined;
