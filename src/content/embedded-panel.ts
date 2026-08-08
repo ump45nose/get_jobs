@@ -63,7 +63,7 @@ export function mountEmbeddedPanel(options: EmbeddedPanelOptions): EmbeddedPanel
       cursor: pointer;
       transition: transform .16s ease, box-shadow .16s ease, right .2s ease;
     }
-    .launcher[data-open="true"] { right: min(462px, calc(100vw - 72px)); }
+    .launcher[data-open="true"] { right: min(552px, calc(100vw - 72px)); }
     .launcher:hover {
       transform: translateY(-2px);
       box-shadow: 0 13px 32px rgba(154, 62, 18, 0.4);
@@ -90,7 +90,7 @@ export function mountEmbeddedPanel(options: EmbeddedPanelOptions): EmbeddedPanel
       bottom: 14px;
       z-index: 2147483646;
       display: grid;
-      width: min(430px, calc(100vw - 28px));
+      width: min(520px, calc(100vw - 28px));
       grid-template-rows: 42px minmax(0, 1fr);
       overflow: hidden;
       border: 1px solid rgba(23, 32, 42, 0.16);
