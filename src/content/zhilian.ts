@@ -9,10 +9,7 @@ import {
   parseZhilianJobs,
 } from "../shared/zhilian-parser";
 import { randomActionDelayMilliseconds } from "../shared/defaults";
-import {
-  findZhilianResumeDialog,
-  findZhilianSuccessCloseButton,
-} from "../shared/zhilian-resume-dialog";
+import { findZhilianSuccessCloseButton } from "../shared/zhilian-success-dialog";
 import type {
   BackgroundRequest,
   ContentRequest,
@@ -25,7 +22,7 @@ import type {
 } from "../shared/types";
 
 const SUPPORTED_HOST_PATTERN = /(^|\.)zhaopin\.com$/i;
-const APPLY_TEXTS = new Set(["立即投递", "投递简历", "申请职位"]);
+const APPLY_TEXTS = new Set(["立即投递", "申请职位"]);
 const ALREADY_APPLIED_TEXTS = new Set(["已投递", "已申请"]);
 
 let panelController: EmbeddedPanelController | null = null;
@@ -144,7 +141,7 @@ function inspectCurrentOutcome(ignoredTexts: ReadonlySet<string> = new Set()): Z
   return { outcome: "unknown" };
 }
 
-/** 让本次新开的智联标签页继续完成简历选择与提交。 */
+/** 让本次新开的智联标签页继续等待明确申请回执。 */
 async function continueExternalApplication(
   knownTabIds: number[],
   taskId: string,
@@ -202,23 +199,16 @@ async function waitAction(config: ZhilianConfig): Promise<void> {
   if (!completed) throw new Error("智联任务已停止");
 }
 
-/** 当前文档内一次简历工作流的临时状态。 */
-interface ZhilianApplicationProgress {
-  resumeSubmitted: boolean;
-}
-
 /**
- * 推进当前文档内的简历选择、提交、回执与成功关闭动作。
+ * 检查当前文档回执，并仅在明确成功后关闭成功弹窗。
  *
  * @param config 保存时冻结的智联配置。
  * @param ignoredTexts 点击前已存在的回执文本。
- * @param progress 本次文档内是否已经提交简历。
  * @returns 出现明确结果时返回；仍在等待时返回 unknown。
  */
 async function advanceCurrentApplication(
   config: ZhilianConfig,
   ignoredTexts: ReadonlySet<string>,
-  progress: ZhilianApplicationProgress,
 ): Promise<ZhilianExternalOutcome> {
   const outcome = inspectCurrentOutcome(ignoredTexts);
   if (outcome.outcome !== "unknown") {
@@ -229,23 +219,10 @@ async function advanceCurrentApplication(
     }
     return outcome;
   }
-  const dialog = findZhilianResumeDialog(document, config);
-  if (!dialog || progress.resumeSubmitted) return { outcome: "unknown" };
-
-  await waitAction(config);
-  const freshDialog = findZhilianResumeDialog(document, config);
-  if (!freshDialog) throw new Error("智联简历弹窗在选择前消失，已停止并保留现场");
-  // 不点击“每次投递默认发送该简历”，只选择本次任务配置的简历。
-  freshDialog.resumeControl.click();
-  await waitAction(config);
-  const confirmedDialog = findZhilianResumeDialog(document, config);
-  if (!confirmedDialog) throw new Error("智联简历弹窗在提交前消失，已停止并保留现场");
-  confirmedDialog.submitButton.click();
-  progress.resumeSubmitted = true;
-  return { outcome: "unknown", evidence: `已提交简历：${confirmedDialog.selectedResumeText}` };
+  return { outcome: "unknown" };
 }
 
-/** 在当前智联文档内完成简历工作流，供新开的岗位页调用。 */
+/** 在当前智联文档内等待申请回执，供新开的岗位页调用。 */
 async function completeCurrentApplication(
   taskId: string,
   config: ZhilianConfig,
@@ -254,12 +231,11 @@ async function completeCurrentApplication(
   if (activeTaskId && activeTaskId !== taskId) throw new Error("当前页面已有智联任务正在运行");
   activeTaskId = taskId;
   stopRequested = false;
-  const progress: ZhilianApplicationProgress = { resumeSubmitted: false };
   const deadline = Date.now() + config.batch.resumeReceiptTimeoutSeconds * 1_000;
   try {
     while (Date.now() < deadline) {
       if (stopRequested) return { outcome: "unknown", evidence: "智联任务已停止" };
-      const outcome = await advanceCurrentApplication(config, new Set(ignoredOutcomeTexts), progress);
+      const outcome = await advanceCurrentApplication(config, new Set(ignoredOutcomeTexts));
       if (outcome.outcome !== "unknown") return outcome;
       if (!(await wait(250))) return { outcome: "unknown", evidence: "智联任务已停止" };
     }
@@ -270,7 +246,7 @@ async function completeCurrentApplication(
   }
 }
 
-/** 执行一次智联申请并等待当前页或本次新标签页完成完整简历闭环。 */
+/** 执行一次智联申请并等待当前页或本次新标签页返回明确回执。 */
 async function applySingleJob(
   taskId: string,
   cardKey: string,
@@ -301,11 +277,10 @@ async function applySingleJob(
     }
     button.click();
 
-    const progress: ZhilianApplicationProgress = { resumeSubmitted: false };
     const deadline = Date.now() + config.batch.resumeReceiptTimeoutSeconds * 1_000;
     while (Date.now() < deadline) {
       if (stopRequested) return { outcome: "cancelled", message: "任务已停止，请核对智联投递记录", job: target.job };
-      const current = await advanceCurrentApplication(config, baselineOutcomeTexts, progress);
+      const current = await advanceCurrentApplication(config, baselineOutcomeTexts);
       if (current.outcome !== "unknown") return buildResult(target.job, current);
 
       const refreshed = findJobCard(cardKey);
