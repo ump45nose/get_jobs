@@ -214,3 +214,14 @@
 - 注入抽屉建议固定在右侧、独立滚动、可折叠并支持 Esc 关闭；必须设置明确的 `pointer-events` 边界，避免透明宿主遮挡猎聘岗位卡片。不要修改猎聘 `.recommend-result-inner` 一类站点节点的 margin。
 - 现有 Content Script 宿主挂在 `document.documentElement`，猎聘 SPA 的普通路由切换不会替换该根节点；仍应增加宿主丢失后的幂等重挂载和卸载清理，防止站点脚本清理未知节点后入口消失。
 - 风险结论：固定 iframe 抽屉的实现/兼容风险为中低，原生 React 直接挂 Shadow Root 为中等，照搬 boss-helper 的页内插入并挤压主内容为中高；三者都不会自然降低或升高现有自动投递账号风险。
+
+## 阶段 24 首页注入式主界面实现依据
+
+- Chrome 官方 MV3 文档确认，网页导航到扩展资源时该资源必须列入 `web_accessible_resources`；资源路径支持 `*` 通配符，并可通过 `matches` 只向猎聘来源开放。Content Script 可用 `chrome.runtime.getURL()` 生成 iframe 地址。
+- Chrome 官方 `chrome.action` 文档确认，无 popup 的工具栏图标可通过 `action.onClicked` 接收当前标签页并触发 Content Script，因此移除 Side Panel 后可把图标改为页内抽屉开关。
+- 为减少资源暴露，只声明 `sidepanel.html` 与 Vite `assets/*`，匹配范围继续限制为现有猎聘域；不扩大 host permissions，也不引入远程脚本。
+- 当前 Content Script 只在文件末尾调用一次 `mountPageLauncher()`，宿主直接挂在 `document.documentElement`；实现抽屉时可复用该稳定宿主，并增加幂等恢复观察器，不需要监听或修改猎聘业务容器。
+- 当前后台只有三处 Side Panel 耦合：`OPEN_SIDE_PANEL` 消息分支、安装时 `setPanelBehavior`、启动时 `setPanelBehavior`。移除这些分支后，新增 `chrome.action.onClicked` 向当前猎聘标签页发送 `TOGGLE_EMBEDDED_PANEL` 即可。
+- 现有 Vite 继续构建 `sidepanel.html` 与 `assets/*`，无需改变输出模型；页面注入只需通过 Manifest 开放这些现有产物。iframe 方案不会把约 224KB React bundle 合并进 37KB Content Script。
+- 抽屉关闭采用隐藏而非卸载 iframe，以保留配置表单和批次内存状态；因此关闭按钮必须明确标为“收起”，文档也需说明收起不会停止正在运行的批次，停止仍使用界面内的专用控件。
+- 0.3.0 最终产物校验确认：源 Manifest 与 `dist/manifest.json` 均无 `side_panel`、`sidePanel` 权限和旧消息分支；iframe HTML 引用的两个 Vite 资源均存在，网页可访问范围仅为猎聘域。
