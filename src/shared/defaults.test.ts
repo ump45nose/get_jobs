@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BATCH_INTERVAL,
+  DEFAULT_LIEPIN_CONFIG,
   normalizeActionInterval,
   normalizeBatchConfig,
   normalizeBatchInterval,
@@ -9,6 +10,13 @@ import {
 } from "./defaults";
 
 describe("顺序投递随机间隔", () => {
+  it("默认启用合规兜底招呼语并关闭完整敏感日志", () => {
+    expect(DEFAULT_LIEPIN_CONFIG.ai.useFallbackGreeting).toBe(true);
+    expect(DEFAULT_LIEPIN_CONFIG.ai.fallbackGreeting.length).toBeGreaterThan(0);
+    expect(DEFAULT_LIEPIN_CONFIG.ai.fallbackGreeting.length).toBeLessThanOrEqual(150);
+    expect(DEFAULT_LIEPIN_CONFIG.ai.detailedLogging).toBe(false);
+  });
+
   it("规整越界、倒置和缺失的间隔值", () => {
     expect(normalizeBatchInterval(80, 20)).toEqual({
       minIntervalSeconds: 20,
