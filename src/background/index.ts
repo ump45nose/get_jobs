@@ -10,6 +10,7 @@ import {
   createIdleTask,
   normalizeAiTimeoutSeconds,
   normalizeBatchConfig,
+  normalizeZhilianConfig,
 } from "../shared/defaults";
 import {
   getLiepinSafetyStatus as buildLiepinSafetyStatus,
@@ -28,6 +29,7 @@ import type {
   TaskState,
   TaskStatus,
   ZhilianAppState,
+  ZhilianConfig,
   ZhilianDeliveryAttempt,
   ZhilianExternalOutcome,
   ZhilianTaskState,
@@ -40,6 +42,8 @@ const TASK_KEY = "liepinTask";
 const SAFETY_KEY = "liepinSafety";
 const WATCHDOG_ALARM = "liepin-task-watchdog";
 const ZHILIAN_TASK_KEY = "zhilianTask";
+const ZHILIAN_CONFIG_KEY = "zhilianConfig";
+const ZHILIAN_SAFETY_KEY = "zhilianSafety";
 const ZHILIAN_WATCHDOG_ALARM = "zhilian-task-watchdog";
 /** 动作间隔最高可配置 10 秒，完整页面闭环最长允许三分钟后再判定失联。 */
 const WATCHDOG_DELAY_MINUTES = 3;
@@ -73,6 +77,28 @@ async function clearWatchdog(): Promise<void> {
 /** 清除智联单岗位任务看门狗。 */
 async function clearZhilianWatchdog(): Promise<void> {
   await chrome.alarms.clear(ZHILIAN_WATCHDOG_ALARM);
+}
+
+/** 读取并规整智联独立配置。 */
+async function getZhilianConfig(): Promise<ZhilianConfig> {
+  const stored = await chrome.storage.local.get(ZHILIAN_CONFIG_KEY);
+  return normalizeZhilianConfig(stored[ZHILIAN_CONFIG_KEY] as Partial<ZhilianConfig> | undefined);
+}
+
+/** 读取智联独立每日配额与长冷却状态。 */
+async function getZhilianSafetyStatus(config: ZhilianConfig): Promise<LiepinSafetyStatus> {
+  const stored = await chrome.storage.local.get(ZHILIAN_SAFETY_KEY);
+  const safety = stored[ZHILIAN_SAFETY_KEY] as Partial<LiepinSafetyState> | undefined;
+  return buildLiepinSafetyStatus(safety, config.batch);
+}
+
+/** 仅在智联明确成功时增加本平台额度并计算下一次长冷却。 */
+async function recordSuccessfulZhilianDelivery(config: ZhilianConfig): Promise<LiepinSafetyState> {
+  const stored = await chrome.storage.local.get(ZHILIAN_SAFETY_KEY);
+  const safety = stored[ZHILIAN_SAFETY_KEY] as Partial<LiepinSafetyState> | undefined;
+  const next = recordLiepinDeliverySuccess(safety, config.batch);
+  await chrome.storage.local.set({ [ZHILIAN_SAFETY_KEY]: next });
+  return next;
 }
 
 /**
@@ -257,10 +283,12 @@ function isZhilianUrl(url: string | undefined): boolean {
   }
 }
 
-/** 查询由当前岗位列表页打开的智联结果页，并向其 Content Script 读取明确回执。 */
-async function findZhilianExternalOutcome(
+/** 查询本次新开的唯一智联标签页，并让其继续完成简历选择、提交和回执等待。 */
+async function continueZhilianExternalApplication(
   sender: chrome.runtime.MessageSender,
   knownTabIds: number[],
+  taskId: string,
+  config: ZhilianConfig,
 ): Promise<ZhilianExternalOutcome> {
   const sourceTabId = sender.tab?.id;
   if (sourceTabId === undefined) return { outcome: "unknown" };
@@ -272,17 +300,37 @@ async function findZhilianExternalOutcome(
     && isZhilianUrl(tab.url)
     && !knownTabIds.includes(tab.id!),
   );
-  for (const tab of candidates) {
-    try {
-      const response = await chrome.tabs.sendMessage(tab.id!, {
-        type: "INSPECT_ZHILIAN_OUTCOME",
-      } satisfies ContentRequest) as ExtensionResponse<ZhilianExternalOutcome>;
-      if (response.ok && response.data && response.data.outcome !== "unknown") return response.data;
-    } catch {
-      // 新标签页 Content Script 可能仍在加载，调用方会继续短轮询。
-    }
+  if (candidates.length === 0) return { outcome: "unknown" };
+  if (candidates.length !== 1) {
+    return { outcome: "failed", evidence: "检测到多个新智联标签页，无法安全归因本次申请" };
   }
-  return { outcome: "unknown" };
+  const tab = candidates[0];
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id!, {
+      type: "COMPLETE_ZHILIAN_APPLICATION",
+      taskId,
+      config,
+    } satisfies ContentRequest) as ExtensionResponse<ZhilianExternalOutcome>;
+    if (!response.ok) return { outcome: "failed", evidence: response.error || "智联结果页处理失败" };
+    return { ...(response.data ?? { outcome: "unknown" as const }), tabId: tab.id };
+  } catch {
+    // 新标签页 Content Script 仍在加载时由列表页继续短轮询，不做自动重试点击。
+    return { outcome: "unknown" };
+  }
+}
+
+/** 关闭本次列表页明确打开且已确认成功的结果标签页。 */
+async function closeZhilianExternalSuccessTab(
+  sender: chrome.runtime.MessageSender,
+  tabId: number,
+): Promise<void> {
+  const sourceTabId = sender.tab?.id;
+  if (sourceTabId === undefined) throw new Error("无法确认智联来源标签页，未关闭结果页");
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.openerTabId !== sourceTabId || !isZhilianUrl(tab.url)) {
+    throw new Error("结果标签页不属于本次智联任务，已拒绝关闭");
+  }
+  await chrome.tabs.remove(tabId);
 }
 
 /** 列出当前智联列表页已经打开的结果标签，供点击前建立基线。 */
@@ -332,9 +380,23 @@ async function handleRequest(
       return { ok: true, data: state };
     }
     case "GET_ZHILIAN_APP_STATE": {
-      const [task, attempts] = await Promise.all([getZhilianTask(), listRecentZhilianAttempts()]);
-      const state: ZhilianAppState = { task, attempts };
+      const [config, task, attempts] = await Promise.all([
+        getZhilianConfig(),
+        getZhilianTask(),
+        listRecentZhilianAttempts(),
+      ]);
+      const safety = await getZhilianSafetyStatus(config);
+      const state: ZhilianAppState = { config, task, attempts, safety };
       return { ok: true, data: state };
+    }
+    case "GET_ZHILIAN_SAFETY_STATUS": {
+      const config = await getZhilianConfig();
+      return { ok: true, data: await getZhilianSafetyStatus(config) };
+    }
+    case "SAVE_ZHILIAN_CONFIG": {
+      const config = normalizeZhilianConfig(request.config);
+      await chrome.storage.local.set({ [ZHILIAN_CONFIG_KEY]: config });
+      return { ok: true, data: config };
     }
     case "GET_LIEPIN_SAFETY_STATUS": {
       const config = await getConfig();
@@ -523,6 +585,9 @@ async function handleRequest(
         if (liepinTask.status === "running" || liepinTask.status === "stopping") {
           return { ok: false, error: "已有猎聘任务正在运行，请完成后再开始智联任务" };
         }
+        const config = await getZhilianConfig();
+        const safety = await getZhilianSafetyStatus(config);
+        if (safety.blockedReason) return { ok: false, error: safety.blockedReason };
         const now = new Date().toISOString();
         const task = await saveZhilianTask({
           platform: "zhilian",
@@ -535,7 +600,8 @@ async function handleRequest(
           updatedAt: now,
           message: `正在申请：${request.job.jobTitle}`,
         });
-        await chrome.alarms.create(ZHILIAN_WATCHDOG_ALARM, { delayInMinutes: 1 });
+        // 简历选择、动作等待与结果页轮询均计入任务时间，沿用三分钟失联窗口。
+        await chrome.alarms.create(ZHILIAN_WATCHDOG_ALARM, { delayInMinutes: WATCHDOG_DELAY_MINUTES });
         return { ok: true, data: task };
       });
     }
@@ -556,6 +622,17 @@ async function handleRequest(
         if (current.taskId !== request.taskId || current.status !== "running") {
           return { ok: true, data: current };
         }
+        // 同时通知本次列表页及其结果子标签，避免停止后子页继续提交简历。
+        if (current.tabId !== undefined && current.taskId) {
+          const tabs = await chrome.tabs.query({});
+          const targets = tabs.filter((tab) => tab.id === current.tabId || tab.openerTabId === current.tabId);
+          await Promise.all(targets.map((tab) => tab.id === undefined
+            ? Promise.resolve()
+            : chrome.tabs.sendMessage(tab.id, {
+                type: "STOP_ZHILIAN_TASK",
+                taskId: current.taskId!,
+              } satisfies ContentRequest).catch(() => undefined)));
+        }
         const task = await saveZhilianTask({ ...current, status: "cancelled", message: "智联任务已停止" });
         await clearZhilianWatchdog();
         return { ok: true, data: task };
@@ -574,6 +651,9 @@ async function handleRequest(
         if (current.taskId !== request.taskId || current.status !== "running") {
           return { ok: true, data: current };
         }
+        if (attempt.outcome === "delivered") {
+          await recordSuccessfulZhilianDelivery(await getZhilianConfig());
+        }
         const task = await saveZhilianTask({
           ...current,
           status: zhilianOutcomeToStatus(attempt.outcome),
@@ -583,8 +663,20 @@ async function handleRequest(
         return { ok: true, data: task };
       });
     }
-    case "FIND_ZHILIAN_EXTERNAL_OUTCOME": {
-      return { ok: true, data: await findZhilianExternalOutcome(sender, request.knownTabIds) };
+    case "CONTINUE_ZHILIAN_EXTERNAL_APPLICATION": {
+      return {
+        ok: true,
+        data: await continueZhilianExternalApplication(
+          sender,
+          request.knownTabIds,
+          request.taskId,
+          request.config,
+        ),
+      };
+    }
+    case "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB": {
+      await closeZhilianExternalSuccessTab(sender, request.tabId);
+      return { ok: true, data: { closed: true } };
     }
     case "LIST_ZHILIAN_EXTERNAL_TABS": {
       return { ok: true, data: await listZhilianExternalTabIds(sender) };
@@ -648,7 +740,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
         await saveZhilianTask({
           ...task,
           status: "interrupted",
-          message: "智联任务超过一分钟未返回结果，已安全中止，请核对投递记录",
+          message: "智联任务超过三分钟未返回结果，已安全中止，请核对投递记录",
         });
       }
     });
