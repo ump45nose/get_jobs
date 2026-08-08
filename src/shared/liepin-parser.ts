@@ -241,7 +241,7 @@ export function detectLiepinLogin(root: ParentNode = document): boolean | null {
 /**
  * 生成当前标签页的猎聘上下文。
  *
- * @returns 侧边栏可直接展示的页面状态。
+ * @returns 助手界面可直接展示的页面状态。
  */
 export function inspectLiepinPage(): LiepinPageContext {
   const supported = location.hostname === "www.liepin.com" || location.hostname.endsWith(".liepin.com");
