@@ -8,9 +8,16 @@ import {
   parseLiepinJobCard,
   parseLiepinJobCards,
 } from "../shared/liepin-parser";
-import { findLiepinResumeConfirmationButton } from "../shared/liepin-resume-dialog";
+import {
+  findLiepinResumeConfirmationButton,
+  isLiepinResumeConfirmationDialogVisible,
+} from "../shared/liepin-resume-dialog";
 import { containsLiepinRiskSignal } from "../shared/liepin-safety";
-import { normalizeActionInterval, randomActionDelayMilliseconds } from "../shared/defaults";
+import {
+  normalizeActionInterval,
+  normalizeResumeReceiptTimeoutSeconds,
+  randomActionDelayMilliseconds,
+} from "../shared/defaults";
 import {
   EMBEDDED_PANEL_HOST_ID,
   mountEmbeddedPanel,
@@ -74,6 +81,9 @@ function delay(milliseconds: number): Promise<void> {
 
 /** 单岗位内部不可逆页面动作使用的配置快照。 */
 type ActionInterval = Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">;
+
+/** 内容脚本执行单岗位投递时使用的动作与简历回执等待配置。 */
+type DeliveryTiming = ActionInterval & Pick<LiepinBatchConfig, "resumeReceiptTimeoutSeconds">;
 
 /**
  * 在两个页面动作之间执行可被停止请求打断的随机稳定等待。
@@ -343,7 +353,57 @@ function countSentGreeting(chat: HTMLElement, greetingText: string): number {
  * @returns 已发送简历卡片数量。
  */
 function countSentResumeCards(chat: HTMLElement): number {
-  return chat.querySelectorAll(LIEPIN_SELECTORS.sentResume).length;
+  const matched = new Set<HTMLElement>();
+  for (const element of chat.querySelectorAll<HTMLElement>(LIEPIN_SELECTORS.sentResume)) {
+    matched.add(element.closest<HTMLElement>(".im-ui-txt.send") ?? element);
+  }
+
+  // 兜底按“本人发送消息 + 简历/附件语义”识别新版本卡片，仍然不扫描接收消息和输入工具栏。
+  for (const message of chat.querySelectorAll<HTMLElement>(".im-ui-txt.send")) {
+    if (message.querySelector(LIEPIN_SELECTORS.sentResume)) continue;
+    const classText = message.querySelector<HTMLElement>("[class*='resume'], [class*='attachment']");
+    const dataText = message.querySelector<HTMLElement>("[data-type*='resume'], [data-type*='attachment']");
+    const text = normalizeText(message.textContent);
+    if ((classText || dataText) && /简历|附件/.test(text)) matched.add(message);
+  }
+  return matched.size;
+}
+
+/**
+ * 生成简历投递阶段的脱敏页面诊断，帮助区分“未点击”与“回执选择器失配”。
+ *
+ * @param chat 当前聊天容器，可为空。
+ * @returns 仅包含计数和布尔值的诊断文本，不包含简历正文。
+ */
+function getResumeDeliveryDiagnostic(chat: HTMLElement | null): string {
+  const resumeCards = chat ? countSentResumeCards(chat) : 0;
+  const dialogVisible = isLiepinResumeConfirmationDialogVisible();
+  const confirmButton = findLiepinResumeConfirmationButton();
+  return `确认弹窗=${dialogVisible ? "仍在" : "已关闭"}，确认按钮=${confirmButton ? "可见" : "未找到"}，本人简历卡片=${resumeCards}`;
+}
+
+/**
+ * 以接近真实鼠标操作的事件顺序触发猎聘 React 按钮。
+ *
+ * @param element 待点击的可见按钮。
+ * @returns 点击事件派发完成时返回。
+ */
+function clickLiepinButton(element: HTMLElement): void {
+  element.focus?.();
+  const view = element.ownerDocument.defaultView ?? window;
+  const rect = element.getBoundingClientRect();
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view,
+    clientX: rect.left + Math.max(1, rect.width / 2),
+    clientY: rect.top + Math.max(1, rect.height / 2),
+  };
+  // 先补齐 Ant/React 可能依赖的鼠标按下和抬起事件，最后只派发一次 click，避免重复发送。
+  element.dispatchEvent(new MouseEvent("mousedown", eventInit));
+  element.dispatchEvent(new MouseEvent("mouseup", eventInit));
+  element.click();
 }
 
 /**
@@ -494,17 +554,34 @@ async function confirmResumeDialogIfPresent(actionInterval: ActionInterval): Pro
   // 弹窗等待期间可能重绘，确认前必须重新获取唯一安全候选。
   const currentButton = findLiepinResumeConfirmationButton();
   if (!currentButton) return false;
-  currentButton.click();
+  clickLiepinButton(currentButton);
   return true;
+}
+
+/**
+ * 等待附件简历确认弹窗完成关闭动画，避免过早读取旧聊天节点。
+ *
+ * @param timeoutMilliseconds 最大等待时长。
+ * @returns 弹窗关闭时返回 true，超时仍存在时返回 false。
+ */
+async function waitForResumeDialogToClose(timeoutMilliseconds = 3_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (!isLiepinResumeConfirmationDialogVisible()) return true;
+    if (stopRequested) return false;
+    await delay(100);
+  }
+  return !isLiepinResumeConfirmationDialogVisible();
 }
 
 /**
  * 在当前聊天窗口单独发送在线/附件简历并等待本人简历卡片数量增加。
  *
- * @param actionInterval 招呼回执后点击简历及确认弹窗前的随机稳定等待区间。
+ * @param timing 招呼回执后动作等待与简历确认回执等待配置。
  * @returns 简历发送阶段回执。
  */
-async function sendResumeAndWait(actionInterval: ActionInterval): Promise<DeliveryStepResult> {
+async function sendResumeAndWait(timing: DeliveryTiming): Promise<DeliveryStepResult> {
+  const actionInterval: ActionInterval = timing;
   if (!await waitForActionInterval(actionInterval)) {
     return { status: "failed", message: "用户已停止本次投递" };
   }
@@ -533,15 +610,11 @@ async function sendResumeAndWait(actionInterval: ActionInterval): Promise<Delive
   }
 
   const baseline = countSentResumeCards(chat);
-  resumeButton.click();
+  clickLiepinButton(resumeButton);
   let confirmationClicked = false;
-  const normalizedActionInterval = normalizeActionInterval(
-    actionInterval.minActionIntervalSeconds,
-    actionInterval.maxActionIntervalSeconds,
-  );
-  // 弹窗确认本身包含一段动作等待，在基础回执时间之外为它单独预留预算。
-  const receiptTimeout = 8_000 + Math.ceil(normalizedActionInterval.maxActionIntervalSeconds * 1_000);
-  return waitForStepReceipt(
+  let confirmationDialogClosed = false;
+  const receiptTimeout = normalizeResumeReceiptTimeoutSeconds(timing.resumeReceiptTimeoutSeconds) * 1_000;
+  const receipt = await waitForStepReceipt(
     () => {
       // React 可能在简历发送后替换聊天节点，始终在当前可见窗口中确认新增卡片。
       const currentChat = getActiveChatContainer();
@@ -552,13 +625,31 @@ async function sendResumeAndWait(actionInterval: ActionInterval): Promise<Delive
     "简历已发送",
     "点击发简历后未检测到简历卡片回执",
     receiptTimeout,
-    // 弹窗可能异步出现；轮询期间仅点击文字明确且唯一的简历确认按钮。
+    // 弹窗可能异步出现；轮询期间仅点击文字明确且唯一的简历确认按钮，并等待关闭后再判断卡片。
     async () => {
       if (!confirmationClicked) {
         confirmationClicked = await confirmResumeDialogIfPresent(actionInterval);
+        if (confirmationClicked) {
+          confirmationDialogClosed = await waitForResumeDialogToClose();
+          // 诊断只输出计数与状态，不输出简历正文或接口密钥。
+          console.debug("[Get Jobs][Liepin][Resume] 已点击确认", {
+            dialogClosed: confirmationDialogClosed,
+            diagnostic: getResumeDeliveryDiagnostic(getActiveChatContainer()),
+          });
+        }
       }
     },
   );
+  if (receipt.status === "unknown") {
+    // 把脱敏诊断同时放入结果，用户无需打开 DevTools 才能判断卡在哪个阶段。
+    const diagnostic = getResumeDeliveryDiagnostic(getActiveChatContainer());
+    return {
+      ...receipt,
+      message: `${receipt.message}（${diagnostic}）`,
+      evidence: diagnostic,
+    };
+  }
+  return receipt;
 }
 
 /**
@@ -598,7 +689,7 @@ async function applySingleJob(
   cardKey: string,
   greetingText: string,
   sendResume: boolean,
-  actionInterval: ActionInterval,
+  actionInterval: DeliveryTiming,
 ): Promise<DeliveryResult> {
   if (applying) {
     throw new Error("已有岗位正在投递，请等待当前任务结束");
