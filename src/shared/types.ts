@@ -84,7 +84,7 @@ export interface DeliverySteps {
   resume?: DeliveryStepResult;
 }
 
-/** 单岗位投递完成后返回给侧边栏的结果。 */
+/** 单岗位投递完成后返回给助手界面的结果。 */
 export interface DeliveryResult {
   outcome: DeliveryOutcome;
   message: string;
@@ -125,7 +125,7 @@ export interface TaskState {
   message: string;
 }
 
-/** 持久化的投递节奏状态，用于跨侧边栏和后台休眠维持安全配额。 */
+/** 持久化的投递节奏状态，用于跨助手实例和后台休眠维持安全配额。 */
 export interface LiepinSafetyState {
   dayKey: string;
   dailyDeliveries: number;
@@ -134,14 +134,14 @@ export interface LiepinSafetyState {
   updatedAt: string;
 }
 
-/** 侧边栏和任务启动前使用的账号安全状态。 */
+/** 助手界面和任务启动前使用的账号安全状态。 */
 export interface LiepinSafetyStatus extends LiepinSafetyState {
   remainingDailyDeliveries: number;
   cooldownRemainingSeconds: number;
   blockedReason?: string;
 }
 
-/** 侧边栏初始化时一次性读取的应用状态。 */
+/** 助手界面初始化时一次性读取的应用状态。 */
 export interface AppState {
   config: LiepinConfig;
   aiApiKeyConfigured: boolean;
@@ -156,7 +156,7 @@ export interface SavedLiepinConfig {
   aiApiKeyConfigured: boolean;
 }
 
-/** AI 生成完成后返回给侧边栏的可编辑草稿。 */
+/** AI 生成完成后返回给助手界面的可编辑草稿。 */
 export interface GreetingDraft {
   text: string;
 }
@@ -164,6 +164,7 @@ export interface GreetingDraft {
 /** 发送给 Content Script 的消息。 */
 export type ContentRequest =
   | { type: "INSPECT_LIEPIN" }
+  | { type: "TOGGLE_EMBEDDED_PANEL" }
   | {
       type: "APPLY_LIEPIN_JOB";
       taskId: string;
@@ -176,7 +177,6 @@ export type ContentRequest =
 
 /** 发送给 Service Worker 的消息。 */
 export type BackgroundRequest =
-  | { type: "OPEN_SIDE_PANEL" }
   | { type: "GET_APP_STATE" }
   | { type: "GET_LIEPIN_SAFETY_STATUS" }
   | { type: "SAVE_LIEPIN_CONFIG"; config: LiepinConfig; apiKey?: string }
