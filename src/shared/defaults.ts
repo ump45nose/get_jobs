@@ -34,6 +34,13 @@ export const MIN_BATCH_INTERVAL_SECONDS = 5;
 /** 当前页顺序投递允许配置的最长随机间隔。 */
 export const MAX_BATCH_INTERVAL_SECONDS = 300;
 
+/** 单岗位内部动作稳定等待允许配置为 0.5 至 10 秒。 */
+export const MIN_ACTION_INTERVAL_SECONDS = 0.5;
+export const MAX_ACTION_INTERVAL_SECONDS = 10;
+
+/** 0.2.8 及以前的新安装默认岗位间隔，用于一次性识别旧配置迁移。 */
+const LEGACY_DEFAULT_BATCH_INTERVAL = { minIntervalSeconds: 15, maxIntervalSeconds: 45 };
+
 /** 单批岗位数允许的安全配置范围。 */
 export const MIN_BATCH_SIZE = 1;
 export const MAX_BATCH_SIZE = 20;
@@ -50,10 +57,12 @@ export const MAX_COOLDOWN_EVERY = 10;
 export const MIN_COOLDOWN_SECONDS = 60;
 export const MAX_COOLDOWN_SECONDS = 900;
 
-/** 默认在两次岗位投递之间随机等待 15 至 45 秒。 */
+/** 默认在两次岗位投递之间随机等待 5 至 15 秒，单岗位内部动作等待 1.5 至 3.5 秒。 */
 export const DEFAULT_BATCH_INTERVAL: LiepinBatchConfig = {
-  minIntervalSeconds: 15,
-  maxIntervalSeconds: 45,
+  minIntervalSeconds: 5,
+  maxIntervalSeconds: 15,
+  minActionIntervalSeconds: 1.5,
+  maxActionIntervalSeconds: 3.5,
   maxBatchSize: 10,
   maxDailyDeliveries: 30,
   cooldownEvery: 5,
@@ -95,6 +104,30 @@ export function normalizeBatchInterval(
 }
 
 /**
+ * 规整单岗位内部动作的随机稳定等待，并保留一位小数配置精度。
+ *
+ * @param minValue 表单或存储提供的最短秒数。
+ * @param maxValue 表单或存储提供的最长秒数。
+ * @returns 可安全传给 Content Script 的动作等待区间。
+ */
+export function normalizeActionInterval(
+  minValue: unknown,
+  maxValue: unknown,
+): Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds"> {
+  const normalizeValue = (value: unknown, fallback: number) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+    const clamped = Math.min(MAX_ACTION_INTERVAL_SECONDS, Math.max(MIN_ACTION_INTERVAL_SECONDS, value));
+    return Math.round(clamped * 10) / 10;
+  };
+  const normalizedMin = normalizeValue(minValue, DEFAULT_BATCH_INTERVAL.minActionIntervalSeconds);
+  const normalizedMax = normalizeValue(maxValue, DEFAULT_BATCH_INTERVAL.maxActionIntervalSeconds);
+  return {
+    minActionIntervalSeconds: Math.min(normalizedMin, normalizedMax),
+    maxActionIntervalSeconds: Math.max(normalizedMin, normalizedMax),
+  };
+}
+
+/**
  * 规整顺序投递的数量和长冷却护栏，防止表单或旧存储绕过范围限制。
  *
  * @param value 待规整的批量配置。
@@ -105,8 +138,20 @@ export function normalizeBatchConfig(value: Partial<LiepinBatchConfig> | undefin
     if (typeof candidate !== "number" || !Number.isFinite(candidate)) return fallback;
     return Math.min(maximum, Math.max(minimum, Math.round(candidate)));
   };
+  const normalizedBatchInterval = normalizeBatchInterval(value?.minIntervalSeconds, value?.maxIntervalSeconds);
+  const isLegacyWithoutActionInterval = typeof value?.minActionIntervalSeconds !== "number"
+    && typeof value?.maxActionIntervalSeconds !== "number";
+  const shouldMigrateLegacyDefault = isLegacyWithoutActionInterval
+    && normalizedBatchInterval.minIntervalSeconds === LEGACY_DEFAULT_BATCH_INTERVAL.minIntervalSeconds
+    && normalizedBatchInterval.maxIntervalSeconds === LEGACY_DEFAULT_BATCH_INTERVAL.maxIntervalSeconds;
   return {
-    ...normalizeBatchInterval(value?.minIntervalSeconds, value?.maxIntervalSeconds),
+    ...(shouldMigrateLegacyDefault
+      ? {
+          minIntervalSeconds: DEFAULT_BATCH_INTERVAL.minIntervalSeconds,
+          maxIntervalSeconds: DEFAULT_BATCH_INTERVAL.maxIntervalSeconds,
+        }
+      : normalizedBatchInterval),
+    ...normalizeActionInterval(value?.minActionIntervalSeconds, value?.maxActionIntervalSeconds),
     maxBatchSize: normalizeInteger(
       value?.maxBatchSize,
       DEFAULT_BATCH_INTERVAL.maxBatchSize,
@@ -149,6 +194,27 @@ export function randomBatchDelayMilliseconds(
   const span = normalized.maxIntervalSeconds - normalized.minIntervalSeconds;
   const seconds = normalized.minIntervalSeconds + Math.floor(Math.min(0.999999999, Math.max(0, random())) * (span + 1));
   return seconds * 1_000;
+}
+
+/**
+ * 生成单岗位两个页面动作之间的随机稳定等待毫秒数。
+ *
+ * @param interval 已规整或待规整的动作秒数区间。
+ * @param random 随机数来源，测试时可注入固定值。
+ * @returns 包含区间两端的整数毫秒数。
+ */
+export function randomActionDelayMilliseconds(
+  interval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">,
+  random: () => number = Math.random,
+): number {
+  const normalized = normalizeActionInterval(
+    interval.minActionIntervalSeconds,
+    interval.maxActionIntervalSeconds,
+  );
+  const minimum = Math.round(normalized.minActionIntervalSeconds * 1_000);
+  const maximum = Math.round(normalized.maxActionIntervalSeconds * 1_000);
+  const span = maximum - minimum;
+  return minimum + Math.floor(Math.min(0.999999999, Math.max(0, random())) * (span + 1));
 }
 
 /** 新安装插件使用的猎聘配置。 */
