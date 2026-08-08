@@ -13,6 +13,7 @@ import {
 import type {
   AppState,
   BackgroundRequest,
+  ContentRequest,
   DeliveryAttempt,
   ExtensionResponse,
   LiepinConfig,
@@ -33,7 +34,7 @@ const WATCHDOG_DELAY_MINUTES = 3;
 let taskMutationQueue: Promise<void> = Promise.resolve();
 
 /**
- * 串行执行任务状态读写，防止两个侧边栏消息同时从 idle 启动任务。
+ * 串行执行任务状态读写，防止两个助手实例同时从 idle 启动任务。
  *
  * @param operation 单次原子业务操作。
  * @returns 操作结果。
@@ -182,15 +183,6 @@ async function handleRequest(
   sender: chrome.runtime.MessageSender,
 ): Promise<ExtensionResponse<unknown>> {
   switch (request.type) {
-    case "OPEN_SIDE_PANEL": {
-      const tabId = sender.tab?.id;
-      if (tabId === undefined) {
-        return { ok: false, error: "无法识别当前猎聘标签页" };
-      }
-      // 此消息由网页悬浮按钮的真实用户点击触发，立即打开对应标签页的侧边栏。
-      await chrome.sidePanel.open({ tabId });
-      return { ok: true, data: { opened: true } };
-    }
     case "GET_APP_STATE": {
       const [config, apiKey, task, attempts] = await Promise.all([
         getConfig(),
@@ -232,7 +224,7 @@ async function handleRequest(
         values[AI_SECRET_KEY] = request.apiKey.trim();
       }
       await chrome.storage.local.set(values);
-      // 重新读取密钥状态，避免侧边栏只根据输入框内容乐观显示“已保存”。
+      // 重新读取密钥状态，避免助手界面只根据输入框内容乐观显示“已保存”。
       const aiApiKeyConfigured = Boolean(await getAiApiKey());
       return { ok: true, data: { config, aiApiKeyConfigured } };
     }
@@ -359,13 +351,10 @@ async function handleRequest(
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   void protectLocalStorage().catch(() => undefined);
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  // 确保浏览器更新或配置恢复后，工具栏图标仍可直接打开侧边栏。
-  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   void protectLocalStorage().catch(() => undefined);
 });
 
@@ -393,10 +382,18 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       await saveTask({
         ...task,
         status: "interrupted",
-        message: "任务超过一分钟未返回结果，已安全中止，请核对猎聘沟通记录",
+        message: "任务超过三分钟未返回结果，已安全中止，请核对猎聘沟通记录",
       });
     }
   });
+});
+
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id === undefined) return;
+  // 工具栏图标只切换当前猎聘标签页中的页内抽屉，不再调用 Chrome Side Panel。
+  void chrome.tabs
+    .sendMessage(tab.id, { type: "TOGGLE_EMBEDDED_PANEL" } satisfies ContentRequest)
+    .catch(() => undefined);
 });
 
 chrome.runtime.onMessage.addListener((request: BackgroundRequest, sender, sendResponse) => {
