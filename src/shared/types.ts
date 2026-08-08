@@ -334,8 +334,14 @@ export type BackgroundRequest =
       knownTabIds: number[];
       taskId: string;
       config: ZhilianConfig;
+      jobId?: string;
     }
-  | { type: "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB"; tabId: number }
+  | {
+      type: "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB";
+      tabId: number;
+      knownTabIds: number[];
+      jobId?: string;
+    }
   | { type: "ZHILIAN_CONTENT_READY" };
 
 /** 跨插件上下文统一使用的消息响应。 */
