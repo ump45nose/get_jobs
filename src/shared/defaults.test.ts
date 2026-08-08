@@ -97,16 +97,12 @@ describe("顺序投递随机间隔", () => {
     expect(normalizeBatchConfig({}).resumeReceiptTimeoutSeconds).toBe(30);
   });
 
-  it("智联默认附件优先并复用同一组安全边界", () => {
-    expect(DEFAULT_ZHILIAN_CONFIG.resumeMode).toBe("attachment");
+  it("智联复用同一组安全边界且不维护简历选择配置", () => {
     expect(normalizeZhilianConfig({
-      resumeMode: "online",
-      preferredResumeName: "  简历-A.pdf  ",
       batch: { ...DEFAULT_BATCH_INTERVAL, maxBatchSize: 999 },
     })).toMatchObject({
-      resumeMode: "online",
-      preferredResumeName: "简历-A.pdf",
       batch: { maxBatchSize: 20 },
     });
+    expect(Object.keys(DEFAULT_ZHILIAN_CONFIG)).toEqual(["batch"]);
   });
 });
