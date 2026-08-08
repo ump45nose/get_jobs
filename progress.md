@@ -118,3 +118,7 @@
 - 已完成抽屉加宽、布局收缩约束、可配置兜底招呼语、两级 POST 诊断和 JSON/代码块/think 标签正文清理；首轮 38 项测试通过，构建仅因测试回调意外返回数组长度产生 TypeScript 签名错误，已定向修正。
 - 修正测试签名后完整检查通过；差异审查进一步补上响应读取失败日志和响应意外回显 Key 的二次脱敏，并将版本提升至 0.3.1、更新 README 与抽屉宽度断言。
 - 最终 `npm run check` 在 0.3.1 下通过：6 个测试文件共 39 项测试、TypeScript 检查和生产构建成功；`dist/manifest.json` 版本为 0.3.1，构建后的 Content Script 包含 520px 抽屉与同步入口偏移，阶段 25 完成。
+- 用户确认猎聘部分基本收束，要求评估与 `D:\Github\boss-helper-v2` 合并为单一插件；开始阶段 26，仅做架构与迁移评估，智联延后，不改写 Git 历史。
+- 完成两个仓库的 Manifest、WXT/Vite、Vue/React、后台、Content Script、消息、存储、AI、IndexedDB、测试、产物体量、许可证与 Git 发布链对比；确认 WXT 官方支持多 Content Script、unlisted iframe page 和额外 React Vite plugin。
+- 发现合并前置冲突：猎聘对整个 `storage.local` 设置 `TRUSTED_CONTEXTS`，会阻断 BOSS Content Script 直接存储；推荐先把 BOSS 存储和 chat-monitor 入队迁到 Background，再统一保护本地存储。
+- 阶段 26 完成：推荐在 BOSS 基线的新 worktree 中实现统一插件，首期保留两个平台各自 UI/状态机；先做配置迁移与 Chrome 双平台验收，Edge/Firefox 与 Vue/AI 统一后置，智联最后实施。本轮未修改 BOSS 仓库，也未触发真实投递。
