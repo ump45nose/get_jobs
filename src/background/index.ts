@@ -1,5 +1,5 @@
 import { listRecentAttempts, saveDeliveryAttempt } from "./database";
-import { generateGreetingDraft } from "./ai";
+import { generateGreetingDraftWithFallback } from "./ai";
 import {
   DEFAULT_LIEPIN_CONFIG,
   createIdleTask,
@@ -12,6 +12,7 @@ import {
 } from "../shared/liepin-safety";
 import type {
   AppState,
+  AiDiagnosticLog,
   BackgroundRequest,
   ContentRequest,
   DeliveryAttempt,
@@ -25,13 +26,17 @@ import type {
 
 const CONFIG_KEY = "liepinConfig";
 const AI_SECRET_KEY = "liepinAiSecret";
+const AI_DIAGNOSTICS_KEY = "liepinAiDiagnostics";
 const TASK_KEY = "liepinTask";
 const SAFETY_KEY = "liepinSafety";
 const WATCHDOG_ALARM = "liepin-task-watchdog";
 /** 动作间隔最高可配置 10 秒，完整页面闭环最长允许三分钟后再判定失联。 */
 const WATCHDOG_DELAY_MINUTES = 3;
+/** 诊断日志只保留最近 20 次 POST，避免扩展本地存储无限增长。 */
+const MAX_AI_DIAGNOSTICS = 20;
 
 let taskMutationQueue: Promise<void> = Promise.resolve();
+let diagnosticMutationQueue: Promise<void> = Promise.resolve();
 
 /**
  * 串行执行任务状态读写，防止两个助手实例同时从 idle 启动任务。
@@ -80,6 +85,15 @@ async function getConfig(): Promise<LiepinConfig> {
       promptTemplate: typeof savedAi?.promptTemplate === "string"
         ? savedAi.promptTemplate
         : DEFAULT_LIEPIN_CONFIG.ai.promptTemplate,
+      useFallbackGreeting: typeof savedAi?.useFallbackGreeting === "boolean"
+        ? savedAi.useFallbackGreeting
+        : DEFAULT_LIEPIN_CONFIG.ai.useFallbackGreeting,
+      fallbackGreeting: typeof savedAi?.fallbackGreeting === "string"
+        ? savedAi.fallbackGreeting
+        : DEFAULT_LIEPIN_CONFIG.ai.fallbackGreeting,
+      detailedLogging: typeof savedAi?.detailedLogging === "boolean"
+        ? savedAi.detailedLogging
+        : DEFAULT_LIEPIN_CONFIG.ai.detailedLogging,
       previewBeforeSend: typeof savedAi?.previewBeforeSend === "boolean"
         ? savedAi.previewBeforeSend
         : DEFAULT_LIEPIN_CONFIG.ai.previewBeforeSend,
@@ -125,6 +139,34 @@ async function recordSuccessfulDelivery(config: LiepinConfig): Promise<LiepinSaf
 async function getAiApiKey(): Promise<string> {
   const stored = await chrome.storage.local.get(AI_SECRET_KEY);
   return typeof stored[AI_SECRET_KEY] === "string" ? stored[AI_SECRET_KEY] : "";
+}
+
+/**
+ * 读取最近 AI POST 诊断；记录中从不包含真实 Authorization。
+ *
+ * @returns 按时间倒序排列的诊断记录。
+ */
+async function getAiDiagnostics(): Promise<AiDiagnosticLog[]> {
+  const stored = await chrome.storage.local.get(AI_DIAGNOSTICS_KEY);
+  const logs = stored[AI_DIAGNOSTICS_KEY];
+  return Array.isArray(logs) ? (logs as AiDiagnosticLog[]) : [];
+}
+
+/**
+ * 串行追加一条脱敏 AI 请求诊断并限制保留数量。
+ *
+ * @param diagnostic 单次 POST 请求诊断。
+ * @returns 写入完成时返回。
+ */
+function recordAiDiagnostic(diagnostic: AiDiagnosticLog): Promise<void> {
+  const operation = diagnosticMutationQueue.then(async () => {
+    const current = await getAiDiagnostics();
+    await chrome.storage.local.set({
+      [AI_DIAGNOSTICS_KEY]: [diagnostic, ...current].slice(0, MAX_AI_DIAGNOSTICS),
+    });
+  });
+  diagnosticMutationQueue = operation.catch(() => undefined);
+  return operation;
 }
 
 /**
@@ -210,6 +252,13 @@ async function handleRequest(
           resumeSummary: request.config.ai.resumeSummary.trim(),
           // 提示词内部换行属于用户模板的一部分，只清理首尾空白。
           promptTemplate: request.config.ai.promptTemplate.trim(),
+          useFallbackGreeting: typeof request.config.ai.useFallbackGreeting === "boolean"
+            ? request.config.ai.useFallbackGreeting
+            : DEFAULT_LIEPIN_CONFIG.ai.useFallbackGreeting,
+          fallbackGreeting: request.config.ai.fallbackGreeting.trim(),
+          detailedLogging: typeof request.config.ai.detailedLogging === "boolean"
+            ? request.config.ai.detailedLogging
+            : DEFAULT_LIEPIN_CONFIG.ai.detailedLogging,
           previewBeforeSend: typeof request.config.ai.previewBeforeSend === "boolean"
             ? request.config.ai.previewBeforeSend
             : DEFAULT_LIEPIN_CONFIG.ai.previewBeforeSend,
@@ -232,10 +281,23 @@ async function handleRequest(
       await chrome.storage.local.remove(AI_SECRET_KEY);
       return { ok: true, data: { cleared: true } };
     }
+    case "GET_LIEPIN_AI_DIAGNOSTICS": {
+      return { ok: true, data: await getAiDiagnostics() };
+    }
+    case "CLEAR_LIEPIN_AI_DIAGNOSTICS": {
+      await chrome.storage.local.remove(AI_DIAGNOSTICS_KEY);
+      return { ok: true, data: { cleared: true } };
+    }
     case "GENERATE_LIEPIN_GREETING": {
       const [config, apiKey] = await Promise.all([getConfig(), getAiApiKey()]);
-      const text = await generateGreetingDraft(config.ai, apiKey, request.job);
-      return { ok: true, data: { text } };
+      const draft = await generateGreetingDraftWithFallback(
+        config.ai,
+        apiKey,
+        request.job,
+        fetch,
+        recordAiDiagnostic,
+      );
+      return { ok: true, data: draft };
     }
     case "START_LIEPIN_TASK": {
       return withTaskMutation(async () => {
