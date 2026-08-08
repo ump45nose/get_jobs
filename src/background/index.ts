@@ -16,6 +16,10 @@ import {
   getLiepinSafetyStatus as buildLiepinSafetyStatus,
   recordLiepinDeliverySuccess,
 } from "../shared/liepin-safety";
+import {
+  findNewZhilianAppliedTabs,
+  isMatchingZhilianAppliedUrl,
+} from "../shared/zhilian-external-tab";
 import type {
   AppState,
   AiDiagnosticLog,
@@ -289,17 +293,13 @@ async function continueZhilianExternalApplication(
   knownTabIds: number[],
   taskId: string,
   config: ZhilianConfig,
+  jobId?: string,
 ): Promise<ZhilianExternalOutcome> {
   const sourceTabId = sender.tab?.id;
   if (sourceTabId === undefined) return { outcome: "unknown" };
   const tabs = await chrome.tabs.query({});
-  const candidates = tabs.filter((tab) =>
-    tab.id !== undefined
-    && tab.id !== sourceTabId
-    && tab.openerTabId === sourceTabId
-    && isZhilianUrl(tab.url)
-    && !knownTabIds.includes(tab.id!),
-  );
+  // 智联成功页可能由 `noopener` 打开而没有 openerTabId；用全局点击前基线、专用路径和岗位编号归因。
+  const candidates = findNewZhilianAppliedTabs(tabs, sourceTabId, knownTabIds, jobId);
   if (candidates.length === 0) return { outcome: "unknown" };
   if (candidates.length !== 1) {
     return { outcome: "failed", evidence: "检测到多个新智联标签页，无法安全归因本次申请" };
@@ -323,23 +323,33 @@ async function continueZhilianExternalApplication(
 async function closeZhilianExternalSuccessTab(
   sender: chrome.runtime.MessageSender,
   tabId: number,
+  knownTabIds: number[],
+  jobId?: string,
 ): Promise<void> {
   const sourceTabId = sender.tab?.id;
   if (sourceTabId === undefined) throw new Error("无法确认智联来源标签页，未关闭结果页");
-  const tab = await chrome.tabs.get(tabId);
-  if (tab.openerTabId !== sourceTabId || !isZhilianUrl(tab.url)) {
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    // 已核验成功的结果页可能被站点自行关闭，此时视为关闭目标已达成。
+    return;
+  }
+  if (tab.id === sourceTabId || knownTabIds.includes(tabId) || !isMatchingZhilianAppliedUrl(tab.url, jobId)) {
     throw new Error("结果标签页不属于本次智联任务，已拒绝关闭");
   }
   await chrome.tabs.remove(tabId);
+  // 智联会把成功页切为活动标签；关闭后显式回到冻结的原列表页，保证批次界面与后续识别上下文一致。
+  await chrome.tabs.update(sourceTabId, { active: true }).catch(() => undefined);
 }
 
-/** 列出当前智联列表页已经打开的结果标签，供点击前建立基线。 */
+/** 列出点击前已存在的全部智联标签，供后续识别本次唯一新增成功页。 */
 async function listZhilianExternalTabIds(sender: chrome.runtime.MessageSender): Promise<number[]> {
   const sourceTabId = sender.tab?.id;
   if (sourceTabId === undefined) return [];
   const tabs = await chrome.tabs.query({});
   return tabs
-    .filter((tab) => tab.id !== undefined && tab.openerTabId === sourceTabId && isZhilianUrl(tab.url))
+    .filter((tab) => tab.id !== undefined && tab.id !== sourceTabId && isZhilianUrl(tab.url))
     .map((tab) => tab.id!);
 }
 
@@ -671,11 +681,12 @@ async function handleRequest(
           request.knownTabIds,
           request.taskId,
           request.config,
+          request.jobId,
         ),
       };
     }
     case "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB": {
-      await closeZhilianExternalSuccessTab(sender, request.tabId);
+      await closeZhilianExternalSuccessTab(sender, request.tabId, request.knownTabIds, request.jobId);
       return { ok: true, data: { closed: true } };
     }
     case "LIST_ZHILIAN_EXTERNAL_TABS": {
