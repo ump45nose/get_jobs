@@ -74,6 +74,9 @@ async function getConfig(): Promise<LiepinConfig> {
       resumeSummary: typeof savedAi?.resumeSummary === "string"
         ? savedAi.resumeSummary
         : DEFAULT_LIEPIN_CONFIG.ai.resumeSummary,
+      promptTemplate: typeof savedAi?.promptTemplate === "string"
+        ? savedAi.promptTemplate
+        : DEFAULT_LIEPIN_CONFIG.ai.promptTemplate,
       previewBeforeSend: typeof savedAi?.previewBeforeSend === "boolean"
         ? savedAi.previewBeforeSend
         : DEFAULT_LIEPIN_CONFIG.ai.previewBeforeSend,
@@ -211,6 +214,8 @@ async function handleRequest(
           model: request.config.ai.model.trim(),
           timeoutSeconds: normalizeAiTimeoutSeconds(request.config.ai.timeoutSeconds),
           resumeSummary: request.config.ai.resumeSummary.trim(),
+          // 提示词内部换行属于用户模板的一部分，只清理首尾空白。
+          promptTemplate: request.config.ai.promptTemplate.trim(),
           previewBeforeSend: typeof request.config.ai.previewBeforeSend === "boolean"
             ? request.config.ai.previewBeforeSend
             : DEFAULT_LIEPIN_CONFIG.ai.previewBeforeSend,
