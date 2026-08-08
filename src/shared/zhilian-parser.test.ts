@@ -76,6 +76,7 @@ describe("detectZhilianOutcomeFromText", () => {
   it("区分验证、额度和简历失败", () => {
     expect(detectZhilianOutcomeFromText("请完成滑块验证").outcome).toBe("blocked");
     expect(detectZhilianOutcomeFromText("今日投递次数已达上限").outcome).toBe("blocked");
+    expect(detectZhilianOutcomeFromText("操作频繁，请稍后再试").outcome).toBe("blocked");
     expect(detectZhilianOutcomeFromText("未设置默认简历").outcome).toBe("failed");
   });
 });
