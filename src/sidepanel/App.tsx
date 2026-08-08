@@ -9,6 +9,7 @@ import {
 import { getLiepinSafetyStatus } from "../shared/liepin-safety";
 import type {
   AppState,
+  AiDiagnosticLog,
   BackgroundRequest,
   ContentRequest,
   DeliveryAttempt,
@@ -214,6 +215,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [safety, setSafety] = useState<LiepinSafetyStatus>(EMPTY_SAFETY);
+  const [aiDiagnostics, setAiDiagnostics] = useState<AiDiagnosticLog[]>([]);
   const batchStopRequested = useRef(false);
   const activeExecution = useRef<{ taskId: string; tabId: number } | null>(null);
 
@@ -262,6 +264,12 @@ export function App() {
     setSafety(state.safety);
   }, []);
 
+  /** 从后台加载最近的脱敏 AI POST 请求诊断。 */
+  const loadAiDiagnostics = useCallback(async () => {
+    const diagnostics = await sendBackground<AiDiagnosticLog[]>({ type: "GET_LIEPIN_AI_DIAGNOSTICS" });
+    setAiDiagnostics(diagnostics);
+  }, []);
+
   /** 从后台刷新持久化每日额度和长冷却状态。 */
   const refreshSafetyStatus = useCallback(async () => {
     const next = await sendBackground<LiepinSafetyStatus>({ type: "GET_LIEPIN_SAFETY_STATUS" });
@@ -283,6 +291,7 @@ export function App() {
 
   useEffect(() => {
     void loadAppState().catch((error: unknown) => setNotice(error instanceof Error ? error.message : String(error)));
+    void loadAiDiagnostics().catch(() => undefined);
     void inspectPage();
 
     /** 扩展存储变化时同步后台任务和安全状态，避免多个助手实例展示过期额度。 */
@@ -294,10 +303,11 @@ export function App() {
           setNotice(error instanceof Error ? error.message : String(error));
         });
       }
+      if (changes.liepinAiDiagnostics) void loadAiDiagnostics().catch(() => undefined);
     };
     chrome.storage.onChanged.addListener(onStorageChanged);
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
-  }, [inspectPage, loadAppState, refreshSafetyStatus]);
+  }, [inspectPage, loadAiDiagnostics, loadAppState, refreshSafetyStatus]);
 
   /** 从当前表单状态构建待保存配置，确保生成按钮使用尚未手动保存的最新输入。 */
   function buildCurrentConfig(): LiepinConfig {
@@ -321,6 +331,9 @@ export function App() {
     }
     if (requireAiCredentials && !next.ai.promptTemplate.trim()) {
       throw new Error("请先填写 AI 招呼语提示词模板");
+    }
+    if (next.ai.useFallbackGreeting && !next.ai.fallbackGreeting.trim()) {
+      throw new Error("已启用兜底招呼语，请填写兜底文本或关闭兜底");
     }
     if (requireAiCredentials && !nextApiKey && !aiApiKeyConfigured) {
       throw new Error("请先填写 API Key；点击生成草稿时会自动保存到本机扩展存储");
@@ -384,6 +397,20 @@ export function App() {
       setApiKey("");
       setAiApiKeyConfigured(false);
       setNotice("已清除本机保存的 AI API Key");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 清除本机保存的 AI 请求诊断，不影响配置和 API Key。 */
+  async function clearAiDiagnostics() {
+    setBusy(true);
+    try {
+      await sendBackground<{ cleared: boolean }>({ type: "CLEAR_LIEPIN_AI_DIAGNOSTICS" });
+      setAiDiagnostics([]);
+      setNotice("AI 请求诊断已清除");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
@@ -484,9 +511,9 @@ export function App() {
       if (saved.config.ai.previewBeforeSend) {
         setPendingDraft({ tabId: tab.id, job, text: draft.text, sendResume, actionInterval });
         setDraftActivity("ready");
-        setNotice("AI 草稿已生成，请预览或编辑后确认发送");
+        setNotice(draft.warning ?? "AI 草稿已生成，请预览或编辑后确认发送");
       } else {
-        setNotice("AI 草稿已生成，正在按配置直接执行页面发送");
+        setNotice(draft.warning ?? "AI 草稿已生成，正在按配置直接执行页面发送");
         setDraftActivity("idle");
         setBusy(false);
         await executeJob(job, draft.text, tab.id, sendResume, actionInterval);
@@ -677,7 +704,9 @@ export function App() {
           total: jobs.length,
           completed: index,
           currentJob: job.jobTitle,
-          message: `正在执行第 ${index + 1}/${jobs.length} 个岗位并等待分阶段回执`,
+          message: draft.source === "fallback"
+            ? `第 ${index + 1}/${jobs.length} 个岗位 AI 不可用，正在使用兜底招呼语并等待分阶段回执`
+            : `正在执行第 ${index + 1}/${jobs.length} 个岗位并等待分阶段回执`,
         });
         const result = await executeJob(
           job,
@@ -936,6 +965,34 @@ export function App() {
           {"{{jobSalary}}"}、{"{{jobEducation}}"}、{"{{jobExperience}}"}、{"{{companyIndustry}}"}、
           {"{{companyScale}}"}、{"{{hrName}}"}、{"{{hrTitle}}"}。写作内容可完全自定义；150 字与 3 句话发送上限固定生效。
         </p>
+        <div className="fallback-config">
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={config.ai.useFallbackGreeting}
+              onChange={(event) => setConfig({
+                ...config,
+                ai: { ...config.ai, useFallbackGreeting: event.target.checked },
+              })}
+            />
+            <span>AI 请求或输出无效时使用兜底招呼语</span>
+          </label>
+          {config.ai.useFallbackGreeting && (
+            <label>
+              兜底招呼语（1–150 字，最多 3 句话）
+              <textarea
+                value={config.ai.fallbackGreeting}
+                onChange={(event) => setConfig({
+                  ...config,
+                  ai: { ...config.ai, fallbackGreeting: event.target.value },
+                })}
+                rows={3}
+                maxLength={150}
+              />
+            </label>
+          )}
+          <p className="privacy-note">兜底只用于点击猎聘发送控件之前的 AI 生成失败；页面点击后结果未知时仍会停止，不会自动重发。</p>
+        </div>
         <div className="toggle-list">
           <label className="toggle-row">
             <input
@@ -959,8 +1016,37 @@ export function App() {
             />
             <span>AI 招呼成功后单独发送简历</span>
           </label>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={config.ai.detailedLogging}
+              onChange={(event) => setConfig({
+                ...config,
+                ai: { ...config.ai, detailedLogging: event.target.checked },
+              })}
+            />
+            <span>记录完整 AI 请求与响应（可能包含简历，默认关闭）</span>
+          </label>
         </div>
-        <p className="privacy-note">自定义提示词及其岗位/简历变量会发送给你配置的 AI 服务；API Key 仅保存在本机扩展存储，不写入投递历史。</p>
+        <p className="privacy-note">自定义提示词及其岗位/简历变量会发送给你配置的 AI 服务；API Key 仅保存在本机扩展存储，诊断中的 Authorization 始终显示为 [REDACTED]。</p>
+        <details className="ai-diagnostics">
+          <summary>AI POST 请求诊断（{aiDiagnostics.length}）</summary>
+          <div className="diagnostic-tools">
+            <button className="ghost" type="button" onClick={loadAiDiagnostics} disabled={busy}>刷新</button>
+            <button className="text-button" type="button" onClick={clearAiDiagnostics} disabled={busy || !aiDiagnostics.length}>清空</button>
+          </div>
+          <p className="privacy-note">默认仅记录 URL、模型、消息长度、HTTP 状态、耗时和错误；开启完整日志后才记录有限长度的 POST Body 与响应正文。</p>
+          <div className="diagnostic-list">
+            {aiDiagnostics.slice(0, 5).map((diagnostic) => (
+              <article key={diagnostic.id}>
+                <strong>{diagnostic.phase === "generate" ? "生成" : "压缩"} · {diagnostic.outcome}</strong>
+                <span>{new Date(diagnostic.createdAt).toLocaleString()} · {diagnostic.durationMs}ms</span>
+                <pre>{JSON.stringify(diagnostic, null, 2)}</pre>
+              </article>
+            ))}
+            {!aiDiagnostics.length && <p className="empty">尚无 AI 请求诊断。</p>}
+          </div>
+        </details>
       </section>
 
       {pendingDraft && (
