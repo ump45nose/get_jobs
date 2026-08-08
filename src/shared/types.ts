@@ -64,6 +64,49 @@ export interface LiepinPageContext {
   issue?: string;
 }
 
+/** 从智联岗位卡片提取的稳定业务字段。 */
+export interface ZhilianJobSnapshot {
+  cardKey: string;
+  fingerprint: string;
+  jobId?: string;
+  jobTitle: string;
+  jobLink?: string;
+  jobSalaryText?: string;
+  jobArea?: string;
+  jobEduReq?: string;
+  jobExpReq?: string;
+  compName?: string;
+  buttonText?: string;
+}
+
+/** 内容脚本对当前智联页面的识别结果。 */
+export interface ZhilianPageContext {
+  supported: boolean;
+  loggedIn: boolean | null;
+  url: string;
+  jobs: ZhilianJobSnapshot[];
+  issue?: string;
+}
+
+/** 智联页面对一次申请动作给出的可核验结果。 */
+export type ZhilianOutcome = "delivered" | "already-applied" | "cancelled" | "blocked" | "failed";
+
+/** 智联单岗位申请结果；未知结果统一映射为 failed 且不计入成功。 */
+export interface ZhilianDeliveryResult {
+  outcome: ZhilianOutcome;
+  message: string;
+  job: ZhilianJobSnapshot;
+  evidence?: string;
+}
+
+/** 持久化的智联申请尝试。 */
+export interface ZhilianDeliveryAttempt extends ZhilianDeliveryResult {
+  id?: number;
+  taskId: string;
+  platform: "zhilian";
+  createdAt: string;
+}
+
 /** 单岗位投递的业务结果，避免把“已联系”误计为新投递。 */
 export type DeliveryOutcome =
   | "delivered"
@@ -139,6 +182,31 @@ export interface TaskState {
   startedAt?: string;
   updatedAt: string;
   message: string;
+}
+
+/** 智联独立任务状态，避免覆盖猎聘正在运行或待核对的任务。 */
+export interface ZhilianTaskState {
+  platform: "zhilian";
+  status: TaskStatus;
+  taskId?: string;
+  tabId?: number;
+  cardKey?: string;
+  jobId?: string;
+  startedAt?: string;
+  updatedAt: string;
+  message: string;
+}
+
+/** 智联助手初始化时读取的最小应用状态。 */
+export interface ZhilianAppState {
+  task: ZhilianTaskState;
+  attempts: ZhilianDeliveryAttempt[];
+}
+
+/** 跨标签查询到的智联投递回执。 */
+export interface ZhilianExternalOutcome {
+  outcome: "success" | "already-applied" | "blocked" | "failed" | "unknown";
+  evidence?: string;
 }
 
 /** 持久化的投递节奏状态，用于跨助手实例和后台休眠维持安全配额。 */
@@ -217,7 +285,11 @@ export type ContentRequest =
       sendResume: boolean;
       actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds" | "resumeReceiptTimeoutSeconds">;
     }
-  | { type: "STOP_LIEPIN_TASK"; taskId: string };
+  | { type: "STOP_LIEPIN_TASK"; taskId: string }
+  | { type: "INSPECT_ZHILIAN" }
+  | { type: "INSPECT_ZHILIAN_OUTCOME" }
+  | { type: "APPLY_ZHILIAN_JOB"; taskId: string; cardKey: string }
+  | { type: "STOP_ZHILIAN_TASK"; taskId: string };
 
 /** 发送给 Service Worker 的消息。 */
 export type BackgroundRequest =
@@ -233,7 +305,15 @@ export type BackgroundRequest =
   | { type: "FINALIZE_LIEPIN_STOP"; taskId: string }
   | { type: "FAIL_LIEPIN_TASK"; taskId: string; message: string }
   | { type: "RECORD_LIEPIN_ATTEMPT"; taskId: string; result: DeliveryResult }
-  | { type: "CONTENT_READY" };
+  | { type: "CONTENT_READY" }
+  | { type: "GET_ZHILIAN_APP_STATE" }
+  | { type: "START_ZHILIAN_TASK"; tabId: number; job: ZhilianJobSnapshot }
+  | { type: "CANCEL_ZHILIAN_TASK"; taskId: string }
+  | { type: "FAIL_ZHILIAN_TASK"; taskId: string; message: string }
+  | { type: "RECORD_ZHILIAN_ATTEMPT"; taskId: string; result: ZhilianDeliveryResult }
+  | { type: "LIST_ZHILIAN_EXTERNAL_TABS" }
+  | { type: "FIND_ZHILIAN_EXTERNAL_OUTCOME"; knownTabIds: number[] }
+  | { type: "ZHILIAN_CONTENT_READY" };
 
 /** 跨插件上下文统一使用的消息响应。 */
 export interface ExtensionResponse<T> {
