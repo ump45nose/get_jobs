@@ -236,3 +236,82 @@
 - MiniMax 官方 OpenAI 兼容接口仍以 `POST /v1/chat/completions` 和 `choices[0].message.content` 返回最终正文；官方也说明部分推理模型可把推理内容放在单独字段。因此本轮保留兼容端点，同时加强对正文中 JSON/代码块包装的提取，不把推理文本误作招呼语。
 - 当前抽屉桌面宽度为 430px，悬浮入口打开时偏移 462px；表单双列 Grid 子项没有 `min-width: 0`。扩大抽屉时必须同步入口偏移，并为 Grid/Flex 子项补充收缩规则。
 - 诊断的真实密钥不只要避开 Authorization 字段，还要防止上游响应或网络错误意外回显；持久化前应对请求、响应与错误文本再次按当前 Key 替换为 `[REDACTED]`。
+
+## 阶段 26 与 boss-helper-v2 合并初步发现
+
+- 两者都是 Manifest V3 扩展，域名天然互斥：`boss-helper-v2` 只匹配 BOSS，`get_jobs-extension` 只匹配猎聘；单一 Manifest 同时声明两组 Content Script 和 host 权限在技术上可行。
+- 最大差异不是平台逻辑，而是工程底座：BOSS 使用 WXT + Vue 3 + Nuxt UI + Tailwind Shadow DOM，并同时构建 Chrome/Edge/Firefox；猎聘使用手写 Vite/esbuild + React 19，仅面向 Chrome。
+- `boss-helper-v2` 已包含更完整的多模型、日志、统计、配置导入导出、IndexedDB、跨浏览器构建与发布设施；猎聘则拥有更严格的分阶段回执、任务看门狗、每日配额和页面注入 iframe 抽屉。若做长期单插件，优先以 BOSS 的 WXT 仓库作为宿主，比把 BOSS 大量 Vue/WXT 能力迁入轻量 React 工程成本更低。
+- 不建议把两个现有产物简单拼进同一 ZIP，也不建议长期并存两套 Service Worker；那会导致 Manifest、消息路由、存储权限、版本和工具栏行为难以统一。应当保留一套 WXT 后台和 Manifest，在其上注册 `boss`、`liepin` 两个平台适配器。
+- `boss-helper-v2` 当前工作树已有用户变更：跟踪文件 `boss-helper-v2-0.6.0.zip` 被删除。本轮只读评估必须保留该状态，不在 BOSS 仓库写入或提交。
+- BOSS 的页面链路分成 ISOLATED Content Script 与注入 MAIN world 的 `boss.js`，通过 `comctx` 和 V2 namespace 通信；猎聘完全运行在 ISOLATED Content Script，并用扩展 iframe 承载 React UI。统一插件不能让猎聘复用 BOSS 的 MAIN-world 请求机制，平台入口应继续分开。
+- BOSS 的 `HelperContext<C,T,S>`、`DeliveryWorkflow`、模型/配置 composable 和日志已经具备一定通用抽象，但当前 Vue 组件、FormData、存储键和文案仍以 BOSS 为中心。可复用的是基础设施和页面容器，不宜强行让猎聘立即改写成同一套投递状态机。
+- 两边都有 IndexedDB，但用途和库不同：BOSS 的 `BossHelperV2DB/images` 保存图片简历，猎聘的原生 IndexedDB 保存投递记录。只要保持不同数据库名即可共存，合并首期无需做危险的数据迁移。
+- 两边都已经实现 AI 兜底和“发送后未知不重试”边界，但模型配置结构、诊断粒度、默认开关不同。首期应保留平台独立配置，后续再抽象共享 Provider，避免一次合并同时改变真实投递行为。
+- WXT 生成的 Chrome Manifest 目前已有一个后台、两个 BOSS Content Script 和一个 `options_ui`；增加猎聘 Content Script 与网页可访问 UI 资源不存在结构限制，但猎聘的 alarm 看门狗、工具栏 action 和可信存储访问级别必须显式迁入这一个后台。
+- BOSS 页面主体运行在 MAIN world，并依赖站点 Vue 实例、内部请求和 MQTT；猎聘只依赖可见 DOM。两者不能共享同一页面适配器，但可以共享后台注册器、平台类型和 AI 请求设施。
+- 合并后无需强求统一视觉：BOSS 继续使用页面内宽列表，猎聘继续使用右侧固定抽屉。用户要求的“一个插件”可以先落实为一个安装包、一个扩展身份和一套构建发布，而不是同时重写两个成熟页面 UI。
+- 许可证是重要发布约束：`boss-helper-v2` 为 MIT；`get_jobs-extension` 当前没有 LICENSE，但原 `get_jobs` 使用 GETJOBS-NC-1.0，仅允许非商业使用并要求保留署名。若猎聘实现包含原项目的派生代码，合并发行物不能整体宣称纯 MIT，必须保留 GET JOBS 非商业条款/署名并清楚标注哪些文件受其约束。
+- 权限体验会发生变化：BOSS 当前安装时申请 `http://*/*`、`https://*/*`，猎聘当前仅固定申请猎聘域并对 AI 域采用 optional permission。合并若直接沿用 BOSS Manifest，会让猎聘用户看到全站访问权限；应单独评估把 AI/地图等外部域迁为可选权限，至少不要因合并进一步扩大权限。
+- BOSS 当前没有正式单元测试脚本，主要依靠类型、lint、格式、构建和静态 smoke；猎聘已有 39 项 Vitest 回归。迁移时应保留猎聘测试，并把 WXT 的验证入口扩展为“单元测试 + 三浏览器构建 + smoke”，不能只依赖 BOSS 现有 smoke。
+- 猎聘约 5,224 行、19 个 TS/TSX/CSS 文件，其中 UI `App.tsx` 约 1,300 行、Content Script 约 807 行、后台/AI 约 936 行；BOSS 源码约 12,929 行、80 个文件。以体量判断，把较小的猎聘模块迁入 BOSS 底座明显优于反向迁移。
+- 猎聘跨浏览器适配的明确阻点是大量 `chrome.*` 直接调用以及 Chrome 专属 `storage.local.setAccessLevel()`；迁入 WXT 时可批量换成 `browser.*`，对 `setAccessLevel` 做能力检测，alarms/action/permissions 则通过 WXT Manifest 按浏览器声明。
+- BOSS 当前用 Bun 锁文件，猎聘用 npm lock；统一仓库应只保留 BOSS 的 Bun/WXT 工具链，不能在同一根目录长期维护两个 lockfile。猎聘 Vitest 可以作为 WXT 仓库的 dev dependency/script 加入。
+- 统一工具栏行为需要平台路由：猎聘页点击 action 切换抽屉；BOSS 页可定位/显示现有助手；其他页面打开统一 options。不能直接照搬猎聘当前“所有 action 点击都向当前 tab 发送 TOGGLE”逻辑。
+- BOSS 仓库有 origin/upstream 和完整发布链，猎聘仓库当前没有远端；从版本管理与后续上游同步角度，也更适合在 `boss-helper-v2` 新建集成分支，而不是把 BOSS 历史搬入猎聘仓库。
+- WXT 官方文档确认同一扩展可通过 `{name}.content.ts` 发现多个 Content Script，也支持 unlisted HTML page 和 `createIframeUi()`；因此猎聘现有“网页固定抽屉 + iframe 扩展页”可在 WXT 中原样表达，不需要先改成 BOSS 的页面内 Vue UI。
+- WXT 官方同时确认可直接加入任意 Vite framework plugin，并为不同 entrypoint 创建独立应用实例；在现有 Vue module 之外增加 React Vite plugin、保留猎聘 React iframe 是受支持的过渡方案。长期是否转 Vue属于维护成本选择，不是合并前置条件。
+- WXT 构建时会在 Node 环境导入 entrypoint 以读取配置，运行时代码必须放在 `main()` 内。迁移猎聘 Content Script 时不能直接复制当前文件末尾的全局监听/挂载代码，应包装为 `defineContentScript({ main(ctx) { ... } })` 并使用 ctx 做卸载/失效清理。
+- Chrome 官方文档确认 `setAccessLevel()` 控制的是整个 storage area，`storage.local` 默认对 Content Script 开放；因此猎聘当前调用 `local.setAccessLevel(TRUSTED_CONTEXTS)` 会直接阻断 BOSS 的 `ContentCounter.storageGet/Set/Rm` 和 chat-monitor 对 local 的直接访问，不能原样合并。
+- 推荐的安全解法不是移除猎聘保护，而是把 BOSS 的存储读写也收口到 Background：为 `BackgroundCounter` 增加 storage get/set/remove，`ContentCounter` 只转发；chat-monitor 改为通过明确消息让后台读取开关和入队。Chrome 支持时再统一设置 `TRUSTED_CONTEXTS`，Firefox 不支持时能力检测后跳过。这样合并反而能提升 BOSS 密钥隔离。
+- 扩展存储按 extension ID 隔离。若以 BOSS 的固定 Manifest key/扩展身份发布，现有 BOSS 配置能延续，但旧 `get_jobs-extension` 的猎聘配置、API Key、投递历史无法被新扩展直接读取。合并前应先给猎聘增加脱敏配置导出，新插件提供导入；API Key 必须重新输入，不能导出。
+- 迁移期间不能让旧猎聘插件与新合并插件同时启用在猎聘域，否则两套 Content Script/悬浮入口可能同时响应。验收流程应是导出配置 → 安装/更新合并版 → 导入并重填 Key → 禁用旧猎聘插件 → 单岗位验收。
+- 现有 Chrome 产物体量约为 BOSS 2.27 MB（其中 MAIN-world `boss.js` 2.19 MB）、猎聘 315 KB；过渡期同时带 Vue 和 React 对安装包影响有限，远小于 BOSS 现有主 bundle，体量不是要求立刻重写 React 的理由。
+- BOSS smoke 目前把版本、ZIP 文件名和大量源码路径/符号写死；合并后需改为平台化 smoke，同时断言 Manifest 同时包含 BOSS/猎聘匹配、猎聘 iframe 资源、alarms/action 权限、两个平台默认高风险开关状态及禁止 Cookie 权限。
+- 猎聘当前构建强制 target `chrome120`，而 BOSS 还构建 Firefox/Edge。首个合并里程碑应先保证 Chrome 产物与猎聘真实验收，再逐步修正 Firefox 能力差异；不应在首次搬迁中宣称猎聘已跨浏览器可用。
+
+### 合并方案比较
+
+| 方案 | 结论 | 主要原因 |
+|---|---|---|
+| 以 BOSS/WXT 为宿主，猎聘 React iframe 暂时保留 | 推荐 | WXT 官方支持多个 Content Script、unlisted iframe page 和额外 React Vite plugin；迁移面最小，能保持两个已验收 UI/状态机 |
+| 以 BOSS/WXT 为宿主，同时把猎聘 UI 重写为 Vue | 后续优化 | 长期技术栈统一，但首次合并会额外重写约 1,300 行 UI，真实投递回归面无必要扩大 |
+| 以猎聘 Vite/React 为宿主迁入 BOSS | 不推荐 | 需要搬迁约 1.3 万行 BOSS/WXT/Vue/MAIN-world/MQTT 代码并重建多浏览器发布体系 |
+| 直接拼接两个现有 dist/ZIP | 不可持续 | Manifest、Service Worker、扩展身份、存储、工具栏和更新链无法仅靠文件复制正确合并 |
+
+### 推荐的首期目录与运行边界
+
+```text
+boss-helper-v2（统一宿主）
+├─ src/entrypoints/background.ts          # 唯一 Service Worker，注册两个平台后台
+├─ src/entrypoints/content.ts             # 现有 BOSS isolated bridge，首期不重排
+├─ src/entrypoints/boss/                  # 现有 BOSS MAIN-world 代码
+├─ src/entrypoints/liepin.content.ts       # 新增猎聘 isolated Content Script
+├─ src/entrypoints/liepin-panel/           # 新增 React iframe 页面
+├─ src/platforms/liepin/background/        # AI、任务、alarms、数据库与消息处理
+├─ src/platforms/liepin/shared/            # parser、resume dialog、safety 与类型
+└─ src/platforms/shared/                   # 后台存储/消息注册等真正通用的少量设施
+```
+
+- 首期不移动现有 BOSS 大目录，避免破坏 upstream 合并；只新增猎聘目录并把后台入口拆成可注册模块。
+- 消息必须带平台前缀或 `platform` 判别字段，后台监听器对未知消息返回 `undefined`，避免两个平台互相消费。
+- 存储继续使用 `boss-helper-v2:*` 与 `liepin*` 独立 namespace；数据库继续保留 `BossHelperV2DB` 和猎聘数据库名。
+- AI 配置首期独立，猎聘继续使用自己的提示词/超时/兜底/诊断；共享模型 Provider 放到合并稳定后的单独重构，不与搬迁耦合。
+
+### 推荐实施顺序
+
+1. 在 BOSS 基线创建独立集成 worktree/分支，保留当前仓库里用户删除 ZIP 的未提交状态；开发构建使用临时扩展 key，避免覆盖已安装 BOSS V2。
+2. 先增加猎聘脱敏配置导出/导入协议，并把 BOSS 配置、模型和 chat-monitor 存储统一代理到 Background，解决 `TRUSTED_CONTEXTS` 冲突。
+3. 在 WXT 中加入 React/Vitest，建立 `liepin.content.ts` 和 `liepin-panel.html` 空壳，先验收 Manifest、iframe 和 action 平台路由，不接真实投递。
+4. 迁入猎聘 shared/parser/safety/database/AI/background，保持原存储 key、默认值、兜底和回执语义，跑完现有 39 项测试。
+5. 迁入猎聘 Content Script 与 React UI；Chrome 上分别做 BOSS 无发送 smoke、猎聘只读识别，然后由用户进行一个猎聘岗位真实闭环。
+6. 更新统一 ZIP、许可证/署名、安装迁移文档；确认旧猎聘插件已禁用，再把生产构建切回 BOSS 固定 Manifest key。
+7. Chrome 稳定后再处理 Edge/Firefox 兼容和是否把猎聘 UI 改写为 Vue；智联适配排在统一插件稳定之后。
+
+### 风险结论与工作量
+
+- 技术可行性：高。WXT 官方能力覆盖所需入口和 iframe UI。
+- 首期实现风险：中等。最大风险依次是 storage access level、旧扩展数据迁移、单后台消息路由和 Chrome-only API，不是页面选择器。
+- 业务回归风险：中低，只要首期保留猎聘状态机和 React UI，不把它强行改写成 BOSS workflow。
+- 发布/授权风险：中高，必须处理 GET JOBS 非商业许可证与署名，不能沿用纯 MIT 表述。
+- 预计工作量：Chrome 单插件 MVP 约 4–7 个专注开发日并包含一次两平台验收；同时统一 Vue UI、AI Provider 和三浏览器行为通常还需额外 3–5 日。该估计不包含后续智联适配。
