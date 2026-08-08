@@ -59,9 +59,9 @@ describe("AI 招呼语", () => {
     })).toBe("您好！");
   });
 
-  it("拒绝空草稿、人工判断和超长内容", () => {
-    expect(() => validateGreetingDraft("需人工判断")).toThrow();
-    expect(() => validateGreetingDraft(" ")).toThrow();
+  it("准确区分空草稿、人工判断和超长内容", () => {
+    expect(() => validateGreetingDraft("需人工判断")).toThrow("当前提示词");
+    expect(() => validateGreetingDraft(" ")).toThrow("空招呼语");
     expect(() => validateGreetingDraft("a".repeat(151))).toThrow("150 字");
   });
 
@@ -93,6 +93,7 @@ describe("AI 招呼语", () => {
     const body = JSON.parse(String(request?.body)) as { messages: Array<{ role: string; content: string }> };
     expect(body.messages[1]?.content).toContain("示例科技");
     expect(body.messages[1]?.content).toContain("语气直接");
+    expect(body).not.toHaveProperty("max_tokens");
   });
 
   it("首次生成超限时自动调用模型压缩后返回合规草稿", async () => {
