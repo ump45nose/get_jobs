@@ -105,3 +105,11 @@
 - 风险初步分级：Shadow DOM 固定浮层方案为中低风险；直接嵌入并挤压猎聘岗位布局为中高风险；账号风控不因 UI 载体变化而明显增加，仍取决于投递频率和页面自动化行为。
 - 完成阶段 23：推荐复用现有 `sidepanel.html`，通过仅猎聘域可访问的 iframe 注入 Shadow DOM 固定抽屉；该方案可保留现有 React、权限申请和后台消息逻辑，避免直接 Content Script 化造成标签页/权限回归。
 - 本轮只修改评估记录，没有改动 Manifest、构建脚本或运行时代码，也没有触发真实岗位沟通、消息或简历发送。
+- 用户确认执行首页注入改造；开始阶段 24，按 Shadow DOM 固定抽屉 + 扩展 iframe 方案实施，投递状态机保持不变。
+- 已通过 Chrome 官方文档确认 MV3 的 web-accessible resource、`runtime.getURL()` 导航和 `action.onClicked` 路径均支持该设计。
+- 已完成运行时落点核验：Content Script 负责 Shadow DOM 抽屉和开关消息，后台移除 Side Panel 分支并接管工具栏点击，现有 Vite/React 页面继续作为 iframe 内容。
+- 已完成 0.3.0 首轮代码改造并新增 3 项抽屉测试；首次检查仅因测试未声明 jsdom 环境失败，业务代码尚未进入构建阶段，已定向补充测试环境声明。
+- 第二轮 `npm run check` 通过：6 个测试文件共 35 项测试、TypeScript 检查和生产构建均成功；源 Manifest 与 `dist/manifest.json` 均已移除 Side Panel 并只向猎聘开放 iframe 资源。
+- 尝试在真实 Chrome 做纯界面验收时，控制通道无法接管 `chrome://extensions` 内部页面，因此未能代替用户点击重新加载；没有刷新猎聘、点击岗位、发送消息或简历。
+- 静态复核补充了收起语义：关闭抽屉仅隐藏并保留 iframe 状态，不会暗中停止批次；按钮提示和 README 已明确要求使用“停止顺序投递”终止运行。
+- 最终 `npm run check` 在 0.3.0 下通过：6 个测试文件共 35 项测试、TypeScript 检查和生产构建成功；额外 Manifest/资源校验确认版本、资源路径和 Side Panel 移除状态正确，阶段 24 完成。
