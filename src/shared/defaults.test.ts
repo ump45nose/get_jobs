@@ -5,6 +5,7 @@ import {
   normalizeActionInterval,
   normalizeBatchConfig,
   normalizeBatchInterval,
+  normalizeResumeReceiptTimeoutSeconds,
   randomActionDelayMilliseconds,
   randomBatchDelayMilliseconds,
 } from "./defaults";
@@ -78,10 +79,19 @@ describe("顺序投递随机间隔", () => {
       maxIntervalSeconds: 40,
       minActionIntervalSeconds: 0.5,
       maxActionIntervalSeconds: 10,
+      resumeReceiptTimeoutSeconds: 30,
       maxBatchSize: 20,
       maxDailyDeliveries: 1,
       cooldownEvery: 3,
       cooldownSeconds: 900,
     });
+  });
+
+  it("规整简历回执等待时长并兼容旧配置", () => {
+    expect(normalizeResumeReceiptTimeoutSeconds(undefined)).toBe(30);
+    expect(normalizeResumeReceiptTimeoutSeconds(1)).toBe(10);
+    expect(normalizeResumeReceiptTimeoutSeconds(999)).toBe(120);
+    expect(normalizeResumeReceiptTimeoutSeconds(45.6)).toBe(46);
+    expect(normalizeBatchConfig({}).resumeReceiptTimeoutSeconds).toBe(30);
   });
 });
