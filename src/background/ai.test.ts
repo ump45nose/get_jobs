@@ -5,6 +5,7 @@ import {
   countGreetingCharacters,
   extractGreetingText,
   generateGreetingDraft,
+  generateGreetingDraftWithFallback,
   renderGreetingPrompt,
   validateGreetingDraft,
 } from "./ai";
@@ -17,6 +18,9 @@ const CONFIG: LiepinAiConfig = {
   timeoutSeconds: 120,
   resumeSummary: "5 年 Java 与 AI 应用经验，负责 Agent 和 RAG 项目落地。",
   promptTemplate: "请结合 {{resumeSummary}} 应聘 {{companyName}} 的 {{jobTitle}}，语气直接。",
+  useFallbackGreeting: true,
+  fallbackGreeting: "您好，我对这个岗位很感兴趣，希望有机会进一步沟通。",
+  detailedLogging: false,
   previewBeforeSend: true,
   sendResume: true,
 };
@@ -63,6 +67,15 @@ describe("AI 招呼语", () => {
     expect(() => validateGreetingDraft("需人工判断")).toThrow("当前提示词");
     expect(() => validateGreetingDraft(" ")).toThrow("空招呼语");
     expect(() => validateGreetingDraft("a".repeat(151))).toThrow("150 字");
+  });
+
+  it("兼容 MiniMax 偶发返回的 JSON、代码块和思考标签包装", () => {
+    expect(validateGreetingDraft('```json\n{"greeting":"您好，希望进一步沟通。"}\n```')).toBe(
+      "您好，希望进一步沟通。",
+    );
+    expect(validateGreetingDraft('<think>先分析岗位匹配度</think>\n招呼语：您好，我有相关项目经验，方便沟通吗？')).toBe(
+      "您好，我有相关项目经验，方便沟通吗？",
+    );
   });
 
   it("渲染完全自定义的白名单变量并拒绝拼错的变量", () => {
@@ -143,5 +156,48 @@ describe("AI 招呼语", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("记录脱敏 POST 诊断且绝不写入 API Key", async () => {
+    const diagnostics: unknown[] = [];
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      upstreamDebug: "super-secret-key",
+      choices: [{ message: { content: "您好，希望进一步沟通。" } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    await generateGreetingDraft(
+      { ...CONFIG, detailedLogging: true },
+      "super-secret-key",
+      JOB,
+      fetcher,
+      (diagnostic) => {
+        diagnostics.push(diagnostic);
+      },
+    );
+
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.stringify(diagnostics)).not.toContain("super-secret-key");
+    expect(JSON.stringify(diagnostics)).toContain("[REDACTED]");
+    expect(JSON.stringify(diagnostics)).toContain("示例科技");
+  });
+
+  it("AI 请求或输出无效时返回已校验的可配置兜底文本", async () => {
+    const invalidOutputFetcher = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "需人工判断" } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const draft = await generateGreetingDraftWithFallback(CONFIG, "secret", JOB, invalidOutputFetcher);
+    expect(draft).toMatchObject({
+      text: CONFIG.fallbackGreeting,
+      source: "fallback",
+    });
+    expect(draft.warning).toContain("需人工判断");
+
+    await expect(generateGreetingDraftWithFallback(
+      { ...CONFIG, useFallbackGreeting: false },
+      "secret",
+      JOB,
+      invalidOutputFetcher,
+    )).rejects.toThrow("当前提示词");
   });
 });
