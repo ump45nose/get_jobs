@@ -13,6 +13,8 @@ export interface LiepinAiConfig {
 export interface LiepinBatchConfig {
   minIntervalSeconds: number;
   maxIntervalSeconds: number;
+  minActionIntervalSeconds: number;
+  maxActionIntervalSeconds: number;
   maxBatchSize: number;
   maxDailyDeliveries: number;
   cooldownEvery: number;
@@ -168,6 +170,7 @@ export type ContentRequest =
       cardKey: string;
       greetingText: string;
       sendResume: boolean;
+      actionInterval: Pick<LiepinBatchConfig, "minActionIntervalSeconds" | "maxActionIntervalSeconds">;
     }
   | { type: "STOP_LIEPIN_TASK"; taskId: string };
 
