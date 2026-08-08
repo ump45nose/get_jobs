@@ -24,7 +24,7 @@ import type {
   TaskState,
 } from "../shared/types";
 
-/** 侧边栏中等待用户预览或编辑的 AI 草稿。 */
+/** 助手界面中等待用户预览或编辑的 AI 草稿。 */
 interface PendingGreetingDraft {
   tabId: number;
   job: LiepinJobSnapshot;
@@ -36,7 +36,7 @@ interface PendingGreetingDraft {
 /** 草稿生成流程独立于持久化投递任务的界面状态。 */
 type DraftActivity = "idle" | "saving" | "generating" | "ready" | "error";
 
-/** 当前页顺序投递在侧边栏中的临时运行状态。 */
+/** 当前页顺序投递在助手界面中的临时运行状态。 */
 interface BatchProgress {
   status: "confirming" | "running" | "waiting" | "stopping" | "completed" | "cancelled" | "failed";
   total: number;
@@ -199,7 +199,7 @@ function stepStatusLabel(status: NonNullable<DeliveryAttempt["steps"]>["communic
   return labels[status];
 }
 
-/** 猎聘插件侧边栏主界面。 */
+/** 猎聘插件页内抽屉主界面。 */
 export function App() {
   const [config, setConfig] = useState<LiepinConfig>(DEFAULT_LIEPIN_CONFIG);
   const [keywordsText, setKeywordsText] = useState("");
@@ -285,7 +285,7 @@ export function App() {
     void loadAppState().catch((error: unknown) => setNotice(error instanceof Error ? error.message : String(error)));
     void inspectPage();
 
-    /** 扩展存储变化时同步后台任务和安全状态，避免多个侧边栏展示过期额度。 */
+    /** 扩展存储变化时同步后台任务和安全状态，避免多个助手实例展示过期额度。 */
     const onStorageChanged = (changes: Record<string, chrome.storage.StorageChange>) => {
       const nextTask = changes.liepinTask?.newValue as TaskState | undefined;
       if (nextTask) setTask(nextTask);
