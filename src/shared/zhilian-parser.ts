@@ -165,3 +165,22 @@ export function detectZhilianOutcomeFromText(text: string): ZhilianExternalOutco
   }
   return { outcome: "unknown" };
 }
+
+/**
+ * 只在智联专用 `/job-applied` 结果页读取全页正文回执。
+ *
+ * @param url 当前页面 URL。
+ * @param bodyText 当前页面可见正文。
+ * @returns 专用结果页中的明确结果；其它页面始终返回 unknown。
+ */
+export function detectZhilianAppliedPageOutcome(url: string, bodyText: string): ZhilianExternalOutcome {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)zhaopin\.com$/i.test(parsed.hostname) || !/^\/job-applied\/?$/i.test(parsed.pathname)) {
+      return { outcome: "unknown" };
+    }
+    return detectZhilianOutcomeFromText(bodyText);
+  } catch {
+    return { outcome: "unknown" };
+  }
+}
