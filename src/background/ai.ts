@@ -168,8 +168,11 @@ function countGreetingSentences(value: string): number {
  */
 export function validateGreetingDraft(value: string): string {
   const normalized = normalizeGreetingDraft(value);
-  if (!normalized || normalized.includes("需人工判断")) {
-    throw new Error("AI 未生成可用招呼语，请补充个人简历摘要后重试");
+  if (!normalized) {
+    throw new Error("AI 接口返回了空招呼语；请检查模型是否正常输出最终正文，或改用非推理模式后重试");
+  }
+  if (normalized.includes("需人工判断")) {
+    throw new Error("AI 根据当前提示词返回“需人工判断”；请调整提示词要求或补充其实际需要的信息");
   }
   if (countGreetingCharacters(normalized) > GREETING_CHARACTER_LIMIT) {
     throw new Error("AI 招呼语超过 150 字，已阻止发送");
@@ -251,7 +254,6 @@ async function requestChatCompletion(
       body: JSON.stringify({
         model: model.trim(),
         temperature: 0.2,
-        max_tokens: 256,
         stream: false,
         messages,
       }),
