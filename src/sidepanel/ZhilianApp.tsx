@@ -206,7 +206,13 @@ export function ZhilianApp() {
         <div className="section-title">
           <div>
             <span className="eyebrow">当前页面</span>
-            <h2>{context.supported ? (context.loggedIn === false ? "未登录" : "智联页面已连接") : "请打开智联招聘"}</h2>
+            <h2>{context.supported
+              ? context.loggedIn === true
+                ? "已登录"
+                : context.loggedIn === false
+                  ? "未登录"
+                  : "登录状态待确认"
+              : "请打开智联招聘"}</h2>
           </div>
           <button className="ghost" type="button" onClick={() => void inspectPage()}>重新识别</button>
         </div>
