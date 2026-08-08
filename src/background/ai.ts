@@ -1,4 +1,9 @@
-import type { LiepinAiConfig, LiepinJobSnapshot } from "../shared/types";
+import type {
+  AiDiagnosticLog,
+  GreetingDraft,
+  LiepinAiConfig,
+  LiepinJobSnapshot,
+} from "../shared/types";
 import { normalizeAiTimeoutSeconds } from "../shared/defaults";
 
 /** OpenAI 兼容 Chat Completions 的最小响应结构。 */
@@ -19,6 +24,9 @@ interface ChatMessage {
 /** 允许测试替换的 fetch 签名。 */
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+/** 后台用于持久化单次 AI 请求诊断的回调。 */
+type DiagnosticReporter = (diagnostic: AiDiagnosticLog) => void | Promise<void>;
+
 /** 猎聘聊天输入允许的招呼语字符上限。 */
 export const GREETING_CHARACTER_LIMIT = 150;
 
@@ -27,7 +35,7 @@ export const GREETING_SENTENCE_LIMIT = 3;
 
 /** 用户可自定义业务提示词，但平台发送边界始终由高优先级消息约束。 */
 const GREETING_SAFETY_PROMPT =
-  "只输出最终中文招呼语纯文本，不要标题、列表、Markdown、引号或解释。输出不得超过150个字符且最多3句话；不能满足时输出“需人工判断”。";
+  "只输出最终中文招呼语纯文本，不要标题、列表、Markdown、JSON、引号或解释。输出不得超过150个字符且最多3句话；信息不足时仅使用已提供事实做保守表达，不得输出拒答、占位符或“需人工判断”。";
 
 /**
  * 把用户配置的 Base URL 规范化为 Chat Completions 地址。
@@ -131,13 +139,56 @@ export function renderGreetingPrompt(
  * @returns 适合进一步校验的单段纯文本。
  */
 function normalizeGreetingDraft(value: string): string {
-  return value
-    .replace(/^```(?:text|markdown)?\s*/iu, "")
+  const withoutFences = value
+    .trim()
+    .replace(/^```(?:json|text|markdown)?\s*/iu, "")
     .replace(/\s*```$/u, "")
+    // 部分推理模型会把思考内容放在 content 的 think 标签中，只保留标签外的最终正文。
+    .replace(/<think>[\s\S]*?<\/think>/giu, "")
+    .trim();
+  const unwrapped = unwrapStructuredGreeting(withoutFences);
+  return unwrapped
     .replace(/^(?:招呼语|输出)\s*[：:]\s*/u, "")
     .replace(/^(?:["“”']+)|(?:["“”']+)$/gu, "")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+/**
+ * 从模型偶发返回的 JSON 包装中提取招呼正文。
+ *
+ * @param value 去除代码块后的模型文本。
+ * @returns 找到已知正文字段时返回字段内容，否则保留原文交给后续校验。
+ */
+function unwrapStructuredGreeting(value: string): string {
+  if (!value.startsWith("{") && !value.startsWith("[") && !value.startsWith('"')) return value;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    const keys = ["greeting", "greetingText", "text", "content", "message", "answer"];
+    const visit = (node: unknown, depth: number): string | undefined => {
+      if (typeof node === "string") return node;
+      if (!node || typeof node !== "object" || depth > 3) return undefined;
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          const found = visit(item, depth + 1);
+          if (found) return found;
+        }
+        return undefined;
+      }
+      const record = node as Record<string, unknown>;
+      for (const key of keys) {
+        if (key in record) {
+          const found = visit(record[key], depth + 1);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    };
+    return visit(parsed, 0) ?? value;
+  } catch {
+    // 非法 JSON 不做猜测性修复，避免把模型解释文字误当作发送正文。
+    return value;
+  }
 }
 
 /**
@@ -241,33 +292,127 @@ async function requestChatCompletion(
   messages: ChatMessage[],
   timeoutSeconds: number,
   fetcher: FetchLike,
+  phase: AiDiagnosticLog["phase"],
+  detailedLogging: boolean,
+  onDiagnostic?: DiagnosticReporter,
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1_000);
-  try {
-    const response = await fetcher(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey.trim()}`,
+  const startedAt = Date.now();
+  const requestBody = JSON.stringify({
+    model: model.trim(),
+    temperature: 0.2,
+    stream: false,
+    messages,
+  });
+
+  /** 即使上游错误或响应意外回显密钥，诊断持久化前也必须二次脱敏。 */
+  const sanitizeDiagnosticText = (value: string): string => {
+    const secret = apiKey.trim();
+    return (secret ? value.split(secret).join("[REDACTED]") : value).slice(0, 20_000);
+  };
+
+  /** 写入日志失败不能反向阻断可用的 AI 草稿。 */
+  const report = async (
+    outcome: AiDiagnosticLog["outcome"],
+    response?: Response,
+    responseBody?: string,
+    error?: string,
+  ) => {
+    if (!onDiagnostic) return;
+    const diagnostic: AiDiagnosticLog = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      createdAt: new Date().toISOString(),
+      phase,
+      endpoint,
+      model: model.trim(),
+      timeoutSeconds,
+      durationMs: Date.now() - startedAt,
+      detailed: detailedLogging,
+      request: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "[REDACTED]",
+        },
+        messageCharacters: messages.map((message) => ({
+          role: message.role,
+          characters: Array.from(message.content).length,
+        })),
+        ...(detailedLogging ? { body: sanitizeDiagnosticText(requestBody) } : {}),
       },
-      body: JSON.stringify({
-        model: model.trim(),
-        temperature: 0.2,
-        stream: false,
-        messages,
-      }),
-      signal: controller.signal,
-    });
+      ...(response ? {
+        response: {
+          status: response.status,
+          statusText: response.statusText,
+          contentType: response.headers.get("Content-Type") ?? "",
+          ...(detailedLogging && responseBody !== undefined
+            ? { body: sanitizeDiagnosticText(responseBody) }
+            : {}),
+        },
+      } : {}),
+      outcome,
+      ...(error ? { error: sanitizeDiagnosticText(error) } : {}),
+    };
+    try {
+      await onDiagnostic(diagnostic);
+    } catch {
+      // 诊断属于辅助能力，存储异常不得改变生成与发送结果。
+    }
+  };
+
+  try {
+    let response: Response;
+    try {
+      response = await fetcher(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey.trim()}`,
+        },
+        body: requestBody,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        const message = `AI 生成超过 ${timeoutSeconds} 秒，已取消本次请求`;
+        await report("timeout", undefined, undefined, message);
+        throw new Error(message);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      await report("network-error", undefined, undefined, message);
+      throw error;
+    }
+
+    let responseBody: string;
+    try {
+      responseBody = await response.text();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await report("invalid-response", response, undefined, `读取 AI 响应正文失败：${message}`);
+      throw new Error(`读取 AI 响应正文失败：${message}`);
+    }
     if (!response.ok) {
-      throw new Error(`AI 接口返回 HTTP ${response.status}`);
+      const message = `AI 接口返回 HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+      await report("http-error", response, responseBody, message);
+      throw new Error(message);
     }
-    return extractGreetingText((await response.json()) as ChatCompletionResponse);
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error(`AI 生成超过 ${timeoutSeconds} 秒，已取消本次请求`);
+
+    let parsed: ChatCompletionResponse;
+    try {
+      parsed = JSON.parse(responseBody) as ChatCompletionResponse;
+    } catch {
+      const message = "AI 接口返回了无法解析的 JSON";
+      await report("invalid-response", response, responseBody, message);
+      throw new Error(message);
     }
-    throw error;
+    const text = extractGreetingText(parsed);
+    if (!text) {
+      await report("invalid-response", response, responseBody, "响应中未找到最终正文 content");
+      return "";
+    }
+    await report("success", response, responseBody);
+    return text;
   } finally {
     clearTimeout(timeout);
   }
@@ -287,6 +432,7 @@ export async function generateGreetingDraft(
   apiKey: string,
   job: LiepinJobSnapshot,
   fetcher: FetchLike = fetch,
+  onDiagnostic?: DiagnosticReporter,
 ): Promise<string> {
   if (!config.model.trim() || !apiKey.trim()) {
     throw new Error("请先配置 AI 模型和 API Key");
@@ -305,6 +451,9 @@ export async function generateGreetingDraft(
     ],
     timeoutSeconds,
     fetcher,
+    "generate",
+    config.detailedLogging,
+    onDiagnostic,
   );
   if (!needsGreetingCompression(firstDraft)) {
     return validateGreetingDraft(firstDraft);
@@ -325,10 +474,45 @@ export async function generateGreetingDraft(
       ],
       timeoutSeconds,
       fetcher,
+      "compress",
+      config.detailedLogging,
+      onDiagnostic,
     );
     return constrainGreetingDraft(compressedDraft);
   } catch {
     // 压缩接口失败时保留首次生成结果并只删除尾部，避免可用草稿因第二次请求失败而丢失。
     return constrainGreetingDraft(firstDraft);
+  }
+}
+
+/**
+ * 生成 AI 草稿，并仅在页面发送前的生成失败阶段使用用户配置的固定兜底文本。
+ *
+ * @param config AI 与兜底配置。
+ * @param apiKey 本机保存的接口密钥。
+ * @param job 当前岗位快照。
+ * @param fetcher 可替换的网络请求实现。
+ * @param onDiagnostic 单次 POST 请求诊断回调。
+ * @returns 标注文本来源的可发送草稿。
+ */
+export async function generateGreetingDraftWithFallback(
+  config: LiepinAiConfig,
+  apiKey: string,
+  job: LiepinJobSnapshot,
+  fetcher: FetchLike = fetch,
+  onDiagnostic?: DiagnosticReporter,
+): Promise<GreetingDraft> {
+  try {
+    const text = await generateGreetingDraft(config, apiKey, job, fetcher, onDiagnostic);
+    return { text, source: "ai" };
+  } catch (error) {
+    if (!config.useFallbackGreeting) throw error;
+    const fallback = validateGreetingDraft(config.fallbackGreeting);
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      text: fallback,
+      source: "fallback",
+      warning: `AI 草稿不可用，已改用兜底招呼语（原因：${reason}）`,
+    };
   }
 }
