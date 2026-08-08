@@ -88,14 +88,8 @@ export interface ZhilianPageContext {
   issue?: string;
 }
 
-/** 智联简历弹窗中允许自动选择的简历类型。 */
-export type ZhilianResumeMode = "attachment" | "online";
-
-/** 智联自动投递的简历与安全节奏配置。 */
+/** 智联自动投递的安全节奏配置。 */
 export interface ZhilianConfig {
-  resumeMode: ZhilianResumeMode;
-  /** 附件名称可留空；仅当页面只有一个附件时允许自动选择。 */
-  preferredResumeName: string;
   batch: LiepinBatchConfig;
 }
 
