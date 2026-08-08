@@ -3,6 +3,7 @@ import {
   ZHILIAN_APPLY_BUTTON_SELECTORS,
   ZHILIAN_OUTCOME_SCOPE_SELECTORS,
   detectZhilianLoginState,
+  detectZhilianAppliedPageOutcome,
   detectZhilianOutcomeFromText,
   findZhilianJobCards,
   parseZhilianJobCard,
@@ -129,6 +130,9 @@ function inspectCurrentOutcome(ignoredTexts: ReadonlySet<string> = new Set()): Z
   }
   // 验证和登录失效可能不是标准弹窗，允许从全页读取这两类高风险信号。
   const bodyText = (document.body?.innerText ?? "").replace(/\s+/g, " ");
+  // `/job-applied` 是智联独立成功页，正文中的“投递成功”是该页面的强回执。
+  const appliedPageOutcome = detectZhilianAppliedPageOutcome(location.href, bodyText);
+  if (appliedPageOutcome.outcome !== "unknown") return appliedPageOutcome;
   if (/滑块验证|安全验证|人机验证|请完成验证|验证码/.test(bodyText)) {
     return { outcome: "blocked", evidence: "智联页面要求完成安全验证" };
   }
@@ -146,21 +150,29 @@ async function continueExternalApplication(
   knownTabIds: number[],
   taskId: string,
   config: ZhilianConfig,
+  jobId?: string,
 ): Promise<ZhilianExternalOutcome> {
   const response = await chrome.runtime.sendMessage({
     type: "CONTINUE_ZHILIAN_EXTERNAL_APPLICATION",
     knownTabIds,
     taskId,
     config,
+    jobId,
   } satisfies BackgroundRequest) as ExtensionResponse<ZhilianExternalOutcome>;
   return response.ok && response.data ? response.data : { outcome: "unknown" };
 }
 
 /** 在明确成功后请求后台关闭本次新开的结果标签页。 */
-async function closeExternalSuccessTab(tabId: number): Promise<void> {
+async function closeExternalSuccessTab(
+  tabId: number,
+  knownTabIds: number[],
+  jobId?: string,
+): Promise<void> {
   const response = await chrome.runtime.sendMessage({
     type: "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB",
     tabId,
+    knownTabIds,
+    jobId,
   } satisfies BackgroundRequest) as ExtensionResponse<unknown>;
   if (!response.ok) throw new Error(response.error || "智联申请成功，但关闭结果页失败");
 }
@@ -295,11 +307,11 @@ async function applySingleJob(
         return buildResult(target.job, { outcome: "success", evidence: `岗位按钮已变为“${refreshedText}”` });
       }
 
-      const external = await continueExternalApplication(knownExternalTabIds, taskId, config)
+      const external = await continueExternalApplication(knownExternalTabIds, taskId, config, target.job.jobId)
         .catch(() => ({ outcome: "unknown" as const }));
       if (external.outcome !== "unknown") {
         if (external.outcome === "success" && external.tabId !== undefined) {
-          await closeExternalSuccessTab(external.tabId);
+          await closeExternalSuccessTab(external.tabId, knownExternalTabIds, target.job.jobId);
         }
         return buildResult(target.job, external);
       }
@@ -312,8 +324,11 @@ async function applySingleJob(
   }
 }
 
-ensureEmbeddedPanel();
-startEmbeddedPanelRecovery();
+// 成功结果页只承担回执监听并会被关闭，不挂载完整助手，避免产生第二个误导界面实例。
+if (!/^\/job-applied\/?$/i.test(location.pathname)) {
+  ensureEmbeddedPanel();
+  startEmbeddedPanelRecovery();
+}
 
 chrome.runtime.onMessage.addListener((request: ContentRequest, _sender, sendResponse) => {
   if (request.type === "TOGGLE_EMBEDDED_PANEL") {
