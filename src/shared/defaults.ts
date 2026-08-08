@@ -38,6 +38,11 @@ export const MAX_BATCH_INTERVAL_SECONDS = 300;
 export const MIN_ACTION_INTERVAL_SECONDS = 0.5;
 export const MAX_ACTION_INTERVAL_SECONDS = 10;
 
+/** 简历确认后的回执等待允许配置为 10 至 120 秒。 */
+export const MIN_RESUME_RECEIPT_TIMEOUT_SECONDS = 10;
+export const MAX_RESUME_RECEIPT_TIMEOUT_SECONDS = 120;
+export const DEFAULT_RESUME_RECEIPT_TIMEOUT_SECONDS = 30;
+
 /** 0.2.8 及以前的新安装默认岗位间隔，用于一次性识别旧配置迁移。 */
 const LEGACY_DEFAULT_BATCH_INTERVAL = { minIntervalSeconds: 15, maxIntervalSeconds: 45 };
 
@@ -63,6 +68,7 @@ export const DEFAULT_BATCH_INTERVAL: LiepinBatchConfig = {
   maxIntervalSeconds: 15,
   minActionIntervalSeconds: 1.5,
   maxActionIntervalSeconds: 3.5,
+  resumeReceiptTimeoutSeconds: DEFAULT_RESUME_RECEIPT_TIMEOUT_SECONDS,
   maxBatchSize: 10,
   maxDailyDeliveries: 30,
   cooldownEvery: 5,
@@ -128,6 +134,20 @@ export function normalizeActionInterval(
 }
 
 /**
+ * 规整简历发送后的平台回执等待时长。
+ *
+ * @param value 表单或旧存储提供的秒数。
+ * @returns 10 至 120 秒之间的整数；无效值使用 30 秒默认值。
+ */
+export function normalizeResumeReceiptTimeoutSeconds(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_RESUME_RECEIPT_TIMEOUT_SECONDS;
+  return Math.min(
+    MAX_RESUME_RECEIPT_TIMEOUT_SECONDS,
+    Math.max(MIN_RESUME_RECEIPT_TIMEOUT_SECONDS, Math.round(value)),
+  );
+}
+
+/**
  * 规整顺序投递的数量和长冷却护栏，防止表单或旧存储绕过范围限制。
  *
  * @param value 待规整的批量配置。
@@ -152,6 +172,7 @@ export function normalizeBatchConfig(value: Partial<LiepinBatchConfig> | undefin
         }
       : normalizedBatchInterval),
     ...normalizeActionInterval(value?.minActionIntervalSeconds, value?.maxActionIntervalSeconds),
+    resumeReceiptTimeoutSeconds: normalizeResumeReceiptTimeoutSeconds(value?.resumeReceiptTimeoutSeconds),
     maxBatchSize: normalizeInteger(
       value?.maxBatchSize,
       DEFAULT_BATCH_INTERVAL.maxBatchSize,
