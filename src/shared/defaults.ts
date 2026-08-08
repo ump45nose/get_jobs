@@ -1,4 +1,4 @@
-import type { LiepinBatchConfig, LiepinConfig, TaskState } from "./types";
+import type { LiepinBatchConfig, LiepinConfig, TaskState, ZhilianConfig } from "./types";
 
 /** AI 请求允许配置的最短超时时间。 */
 export const MIN_AI_TIMEOUT_SECONDS = 10;
@@ -257,6 +257,29 @@ export const DEFAULT_LIEPIN_CONFIG: LiepinConfig = {
   },
   batch: DEFAULT_BATCH_INTERVAL,
 };
+
+/** 智联新安装默认优先选择唯一附件简历，并复用猎聘已验收的安全节奏。 */
+export const DEFAULT_ZHILIAN_CONFIG: ZhilianConfig = {
+  resumeMode: "attachment",
+  preferredResumeName: "",
+  batch: { ...DEFAULT_BATCH_INTERVAL },
+};
+
+/**
+ * 规整智联配置，防止旧存储或表单值绕过安全范围。
+ *
+ * @param value 扩展存储或界面提交的部分配置。
+ * @returns 可直接保存和传给 Content Script 的完整配置。
+ */
+export function normalizeZhilianConfig(value: Partial<ZhilianConfig> | undefined): ZhilianConfig {
+  return {
+    resumeMode: value?.resumeMode === "online" ? "online" : "attachment",
+    preferredResumeName: typeof value?.preferredResumeName === "string"
+      ? value.preferredResumeName.trim()
+      : "",
+    batch: normalizeBatchConfig(value?.batch),
+  };
+}
 
 /**
  * 创建新的空闲任务状态。
