@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { findLiepinResumeConfirmationButton } from "./liepin-resume-dialog";
+import {
+  findLiepinResumeConfirmationButton,
+  waitForLiepinResumeConfirmationButton,
+  waitForLiepinResumeConfirmationDialogToClose,
+} from "./liepin-resume-dialog";
 
 describe("猎聘附件简历确认弹窗", () => {
   beforeEach(() => {
@@ -80,5 +84,82 @@ describe("猎聘附件简历确认弹窗", () => {
     `;
 
     expect(findLiepinResumeConfirmationButton()).toBeUndefined();
+  });
+
+  it("等待 React Portal 延迟挂载后再返回立即投递按钮", async () => {
+    const pending = waitForLiepinResumeConfirmationButton({ timeoutMilliseconds: 300 });
+    window.setTimeout(() => {
+      document.body.innerHTML = `
+        <div role="dialog" class="ant-im-modal">
+          <h2>选择附件简历</h2>
+          <label class="ant-im-radio-wrapper ant-im-radio-wrapper-checked">
+            <input type="radio" checked />简历-俞玮康
+          </label>
+          <button type="button">立即投递</button>
+        </div>
+      `;
+    }, 10);
+
+    expect((await pending)?.textContent).toBe("立即投递");
+  });
+
+  it("按钮重绘为可用状态后才结束串行等待", async () => {
+    document.body.innerHTML = `
+      <div role="dialog" class="ant-im-modal">
+        <h2>选择附件简历</h2>
+        <input type="radio" checked />
+        <button type="button" disabled>立即投递</button>
+      </div>
+    `;
+    const pending = waitForLiepinResumeConfirmationButton({ timeoutMilliseconds: 300 });
+    window.setTimeout(() => {
+      const oldButton = document.querySelector("button");
+      const currentButton = document.createElement("button");
+      currentButton.textContent = "立即投递";
+      oldButton?.replaceWith(currentButton);
+    }, 10);
+
+    expect((await pending)?.textContent).toBe("立即投递");
+  });
+
+  it("等待确认弹窗从页面移除后再返回关闭成功", async () => {
+    document.body.innerHTML = `
+      <div role="dialog" class="ant-im-modal">
+        <h2>选择附件简历</h2>
+      </div>
+    `;
+    const pending = waitForLiepinResumeConfirmationDialogToClose({ timeoutMilliseconds: 300 });
+    window.setTimeout(() => document.querySelector("[role='dialog']")?.remove(), 10);
+
+    expect(await pending).toBe(true);
+  });
+
+  it("业务中止后即使按钮可见也不返回确认控件", async () => {
+    document.body.innerHTML = `
+      <div role="dialog" class="ant-im-modal">
+        <h2>选择附件简历</h2>
+        <input type="radio" checked />
+        <button type="button">立即投递</button>
+      </div>
+    `;
+
+    expect(await waitForLiepinResumeConfirmationButton({
+      timeoutMilliseconds: 100,
+      shouldAbort: () => true,
+    })).toBeUndefined();
+  });
+
+  it("确认弹窗在超时内未关闭时返回 false 并保留现场", async () => {
+    document.body.innerHTML = `
+      <div role="dialog" class="ant-im-modal">
+        <h2>选择附件简历</h2>
+      </div>
+    `;
+
+    expect(await waitForLiepinResumeConfirmationDialogToClose({
+      timeoutMilliseconds: 20,
+      pollMilliseconds: 20,
+    })).toBe(false);
+    expect(document.querySelector("[role='dialog']")).not.toBeNull();
   });
 });
