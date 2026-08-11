@@ -621,27 +621,26 @@ export function App() {
     }
   }
 
-  /** 打开当前页顺序投递确认区，不在第一次点击时直接发送。 */
-  function requestBatchStart() {
+  /**
+   * 统一检查批次启动前置条件，确保顶部直启与底部确认使用同一安全边界。
+   *
+   * @returns 可以启动时返回 undefined；否则返回面向用户的阻止原因。
+   */
+  function getBatchStartIssue(): string | undefined {
     if (busy || taskBusy || batchActive) {
-      setNotice("当前仍有岗位任务，请等待完成或先停止");
-      return;
+      return "当前仍有岗位任务，请等待完成或先停止";
     }
     if (pendingDraft) {
-      setNotice("请先确认或取消当前 AI 草稿");
-      return;
+      return "请先确认或取消当前 AI 草稿";
     }
     if (!context.supported || context.loggedIn !== true) {
-      setNotice("请先在当前标签页登录猎聘并重新识别岗位");
-      return;
+      return "请先在当前标签页登录猎聘并重新识别岗位";
     }
     if (!batchCandidates.length) {
-      setNotice("当前页没有可顺序投递的新岗位；已显示“继续聊”的岗位会被跳过");
-      return;
+      return "当前页没有可顺序投递的新岗位；已显示“继续聊”的岗位会被跳过";
     }
     if (safety.cooldownRemainingSeconds > 0) {
-      setNotice(`账号安全冷却中，约 ${safety.cooldownRemainingSeconds} 秒后可继续`);
-      return;
+      return `账号安全冷却中，约 ${safety.cooldownRemainingSeconds} 秒后可继续`;
     }
     const localRemainingDaily = Math.max(
       0,
@@ -653,9 +652,27 @@ export function App() {
       localRemainingDaily,
     );
     if (queueCount <= 0) {
-      setNotice("当前账号安全额度不足，今日不再启动新投递");
+      return "当前账号安全额度不足，今日不再启动新投递";
+    }
+    return undefined;
+  }
+
+  /** 打开底部当前页顺序投递确认区，不在第一次点击时直接发送。 */
+  function requestBatchStart() {
+    const issue = getBatchStartIssue();
+    if (issue) {
+      setNotice(issue);
       return;
     }
+    const localRemainingDaily = Math.max(
+      0,
+      normalizedBatchConfig.maxDailyDeliveries - safety.dailyDeliveries,
+    );
+    const queueCount = Math.min(
+      batchCandidates.length,
+      normalizedBatchConfig.maxBatchSize,
+      localRemainingDaily,
+    );
     const guardSkipped = batchCandidates.length - queueCount;
     setBatchProgress({
       status: "confirming",
@@ -712,6 +729,11 @@ export function App() {
     let jobs: LiepinJobSnapshot[] = [];
     let completedCount = 0;
     let safeStopReason = "";
+    const issue = getBatchStartIssue();
+    if (issue) {
+      setNotice(issue);
+      return;
+    }
     batchStopRequested.current = false;
     setBusy(true);
     try {
@@ -862,29 +884,23 @@ export function App() {
   }
 
   /**
-   * 从顶部快捷入口复用现有顺序投递三段动作，不创建第二套批次状态。
+   * 顶部快捷入口一次点击直接启动顺序投递；运行中同一位置用于停止。
    *
-   * @returns 当前状态对应的确认、启动或停止请求完成时返回。
+   * @returns 当前状态对应的直接启动或停止请求完成时返回。
    */
   async function handleHeroBatchAction(): Promise<void> {
     if (batchActive) {
       await stopBatch();
       return;
     }
-    if (batchProgress?.status === "confirming") {
-      await confirmBatchStart();
-      return;
-    }
-    requestBatchStart();
+    await confirmBatchStart();
   }
 
   const heroBatchLabel = batchProgress?.status === "stopping"
     ? "正在停止"
     : batchActive
       ? "停止投递"
-      : batchProgress?.status === "confirming"
-        ? "确认并开始"
-        : "顺序投递";
+      : "顺序投递";
   const heroBatchDisabled = batchProgress?.status === "stopping"
     || (!batchActive && (busy || taskBusy || Boolean(pendingDraft)));
 
