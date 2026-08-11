@@ -1,5 +1,13 @@
 # 迁移发现
 
+## 2026-08-11 猎聘附件简历同步确认
+
+- 原 Java `get_jobs` 猎聘实现只点击“聊一聊”、等待聊天窗口并关闭，不发送简历，也不处理附件简历确认弹窗；其“继续聊即已投递”不能作为插件闭环依据。
+- 真实页面弹窗根节点为 `.ant-im-modal[role="dialog"]`，正文含“选择附件简历/招聘方将同时收到”，确认按钮精确文本为“立即投递”且未禁用。
+- 附件单选框在真实 DOM 中 `checked=true`，同时具有 `.ant-im-radio-wrapper-checked` 与 `.ant-im-radio-checked`；当前失败不是未选择简历。
+- 旧实现把 `confirmResumeDialogIfPresent()` 放进 `waitForStepReceipt()` 的每轮回调，弹窗动作和简历卡片回执轮询耦合，容易在 React 重绘或延迟挂载时产生状态竞争与错误诊断。
+- 0.5.3 将一次简历投递总超时分配给四个串行阶段；任一阶段检测到本人简历卡片可直接确认成功，检测到停止、验证或登录失效则终止，弹窗/按钮歧义与关闭超时均返回 unknown 并保留页面现场。
+
 ## 已知背景
 
 - 当前 Java 项目使用 Spring Boot、Playwright、SQLite 和 Next.js。
