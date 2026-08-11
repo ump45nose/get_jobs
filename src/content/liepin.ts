@@ -11,6 +11,8 @@ import {
 import {
   findLiepinResumeConfirmationButton,
   isLiepinResumeConfirmationDialogVisible,
+  waitForLiepinResumeConfirmationButton,
+  waitForLiepinResumeConfirmationDialogToClose,
 } from "../shared/liepin-resume-dialog";
 import { containsLiepinRiskSignal } from "../shared/liepin-safety";
 import {
@@ -676,37 +678,35 @@ async function sendGreetingAndWait(
 }
 
 /**
- * 如果猎聘弹出简历确认框，则点击其中唯一明确的确认按钮。
+ * 读取附件简历流程中已经成立的终态，供每个同步阶段统一提前结束。
  *
- * @param actionInterval 弹窗出现后点击确认前的随机稳定等待区间。
- * @returns 找到并点击确认按钮时返回 true。
+ * @param baseline 点击发简历前本人简历卡片数量。
+ * @returns 已发送、停止、验证或登录失效终态；流程仍可继续时返回 undefined。
  */
-async function confirmResumeDialogIfPresent(actionInterval: ActionInterval): Promise<boolean> {
-  const button = findLiepinResumeConfirmationButton();
-  if (!button) return false;
-  if (!await waitForActionInterval(actionInterval)) return false;
-  if (detectVerificationEvidence()) return false;
-  // 弹窗等待期间可能重绘，确认前必须重新获取唯一安全候选。
-  const currentButton = findLiepinResumeConfirmationButton();
-  if (!currentButton) return false;
-  clickLiepinButton(currentButton);
-  return true;
+function getResumeFlowTerminalResult(baseline: number): DeliveryStepResult | undefined {
+  const currentChat = getActiveChatContainer();
+  if (currentChat && countSentResumeCards(currentChat) > baseline) {
+    return {
+      status: "success",
+      message: "简历已发送",
+      evidence: "当前聊天新增本人简历卡片",
+    };
+  }
+  if (stopRequested) return { status: "failed", message: "用户已停止本次投递" };
+  const verification = detectVerificationEvidence();
+  if (verification) return { status: "failed", message: "猎聘要求安全验证", evidence: verification };
+  if (detectLiepinLogin() === false) return { status: "failed", message: "猎聘登录状态已失效" };
+  return undefined;
 }
 
 /**
- * 等待附件简历确认弹窗完成关闭动画，避免过早读取旧聊天节点。
+ * 计算简历同步闭环剩余可用时间，确保弹窗、确认和回执共享同一个总超时。
  *
- * @param timeoutMilliseconds 最大等待时长。
- * @returns 弹窗关闭时返回 true，超时仍存在时返回 false。
+ * @param deadline 简历闭环总截止时间戳。
+ * @returns 至少为 0 的剩余毫秒数。
  */
-async function waitForResumeDialogToClose(timeoutMilliseconds = 3_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    if (!isLiepinResumeConfirmationDialogVisible()) return true;
-    if (stopRequested) return false;
-    await delay(100);
-  }
-  return !isLiepinResumeConfirmationDialogVisible();
+function getResumeFlowRemainingMilliseconds(deadline: number): number {
+  return Math.max(0, deadline - Date.now());
 }
 
 /**
@@ -768,10 +768,106 @@ async function sendResumeAndWait(
     elapsedMilliseconds: Date.now() - startedAt,
   });
   clickLiepinButton(resumeButton);
-  let confirmationClicked = false;
-  let confirmationDialogClosed = false;
-  let confirmationDialogObserved = false;
   const receiptTimeout = normalizeResumeReceiptTimeoutSeconds(timing.resumeReceiptTimeoutSeconds) * 1_000;
+  const flowDeadline = Date.now() + receiptTimeout;
+  const shouldAbortConfirmationWait = (): boolean => Boolean(getResumeFlowTerminalResult(baseline));
+
+  // 第一步必须同步等待附件弹窗与唯一确认按钮；此阶段不再并行等待聊天回执。
+  let confirmButton = await waitForLiepinResumeConfirmationButton({
+    timeoutMilliseconds: getResumeFlowRemainingMilliseconds(flowDeadline),
+    shouldAbort: shouldAbortConfirmationWait,
+  });
+  let terminalResult = getResumeFlowTerminalResult(baseline);
+  if (terminalResult) {
+    onLog?.("resume", terminalResult.status === "success" ? "receipt-success" : "interrupted", terminalResult.message, {
+      elapsedMilliseconds: Date.now() - startedAt,
+    });
+    return terminalResult;
+  }
+  if (!confirmButton) {
+    const diagnostic = getResumeDeliveryDiagnostic(getActiveChatContainer());
+    onLog?.("resume", "dialog-timeout", "未在超时前取得唯一可用的附件简历确认按钮", {
+      elapsedMilliseconds: Date.now() - startedAt,
+      diagnostic,
+    });
+    return {
+      status: "unknown",
+      message: `点击发简历后未检测到可确认的附件简历弹窗，结果未知，请先核对当前聊天记录（${diagnostic}）`,
+      evidence: diagnostic,
+    };
+  }
+  onLog?.("resume", "dialog-ready", "附件简历确认弹窗和按钮已就绪", {
+    elapsedMilliseconds: Date.now() - startedAt,
+  });
+
+  // 第二步等待真人动作间隔；等待结束后必须重新定位，不能持有 React 重绘前的按钮节点。
+  if (!await waitForActionInterval(actionInterval)) {
+    onLog?.("resume", "cancelled", "点击附件简历确认按钮前收到停止请求");
+    return { status: "failed", message: "用户已停止本次投递" };
+  }
+  terminalResult = getResumeFlowTerminalResult(baseline);
+  if (terminalResult) return terminalResult;
+  const remainingConfirmationTimeout = getResumeFlowRemainingMilliseconds(flowDeadline);
+  if (remainingConfirmationTimeout <= 0) {
+    const diagnostic = getResumeDeliveryDiagnostic(getActiveChatContainer());
+    onLog?.("resume", "confirm-timeout", "动作等待结束时附件简历确认已超过总超时", { diagnostic });
+    return {
+      status: "unknown",
+      message: `附件简历确认等待超时，未执行立即投递，请先核对页面（${diagnostic}）`,
+      evidence: diagnostic,
+    };
+  }
+  confirmButton = await waitForLiepinResumeConfirmationButton({
+    timeoutMilliseconds: remainingConfirmationTimeout,
+    shouldAbort: shouldAbortConfirmationWait,
+  });
+  terminalResult = getResumeFlowTerminalResult(baseline);
+  if (terminalResult) return terminalResult;
+  if (!confirmButton) {
+    const diagnostic = getResumeDeliveryDiagnostic(getActiveChatContainer());
+    onLog?.("resume", "confirm-lost", "等待动作间隔后附件简历确认按钮失效", { diagnostic });
+    return {
+      status: "unknown",
+      message: `附件简历弹窗在确认前发生变化，未执行立即投递，结果未知，请先核对页面（${diagnostic}）`,
+      evidence: diagnostic,
+    };
+  }
+  clickLiepinButton(confirmButton);
+  onLog?.("resume", "click-confirm", "已点击附件简历立即投递按钮", {
+    elapsedMilliseconds: Date.now() - startedAt,
+  });
+
+  // 第三步必须等弹窗关闭后，才允许进入聊天简历卡片回执阶段。
+  const confirmationDialogClosed = await waitForLiepinResumeConfirmationDialogToClose({
+    timeoutMilliseconds: getResumeFlowRemainingMilliseconds(flowDeadline),
+    shouldAbort: shouldAbortConfirmationWait,
+  });
+  terminalResult = getResumeFlowTerminalResult(baseline);
+  if (terminalResult?.status === "success") {
+    onLog?.("resume", "receipt-success", terminalResult.message, {
+      elapsedMilliseconds: Date.now() - startedAt,
+    });
+    return terminalResult;
+  }
+  if (terminalResult) return terminalResult;
+  if (!confirmationDialogClosed) {
+    const diagnostic = getResumeDeliveryDiagnostic(getActiveChatContainer());
+    onLog?.("resume", "dialog-close-timeout", "点击立即投递后附件简历弹窗未关闭", {
+      elapsedMilliseconds: Date.now() - startedAt,
+      diagnostic,
+    });
+    return {
+      status: "unknown",
+      message: `点击立即投递后附件简历弹窗未关闭，结果未知，请先核对页面（${diagnostic}）`,
+      evidence: diagnostic,
+    };
+  }
+  onLog?.("resume", "dialog-closed", "附件简历确认弹窗已关闭，开始等待聊天回执", {
+    elapsedMilliseconds: Date.now() - startedAt,
+  });
+
+  // 第四步只读取简历卡片回执，不再承担任何弹窗点击副作用。
+  const remainingReceiptTimeout = getResumeFlowRemainingMilliseconds(flowDeadline);
   const receipt = await waitForStepReceipt(
     () => {
       // React 可能在简历发送后替换聊天节点，始终在当前可见窗口中确认新增卡片。
@@ -782,31 +878,8 @@ async function sendResumeAndWait(
     },
     "简历已发送",
     "点击发简历后未检测到简历卡片回执",
-    receiptTimeout,
-    // 弹窗可能异步出现；轮询期间仅点击文字明确且唯一的简历确认按钮，并等待关闭后再判断卡片。
-    async () => {
-      if (!confirmationDialogObserved && isLiepinResumeConfirmationDialogVisible()) {
-        confirmationDialogObserved = true;
-        onLog?.("resume", "dialog-visible", "已检测到附件简历确认弹窗", {
-          confirmButtonFound: Boolean(findLiepinResumeConfirmationButton()),
-        });
-      }
-      if (!confirmationClicked) {
-        confirmationClicked = await confirmResumeDialogIfPresent(actionInterval);
-        if (confirmationClicked) {
-          confirmationDialogClosed = await waitForResumeDialogToClose();
-          onLog?.("resume", "click-confirm", "已点击附件简历确认按钮", {
-            dialogClosed: confirmationDialogClosed,
-            elapsedMilliseconds: Date.now() - startedAt,
-          });
-          // 诊断只输出计数与状态，不输出简历正文或接口密钥。
-          console.debug("[Get Jobs][Liepin][Resume] 已点击确认", {
-            dialogClosed: confirmationDialogClosed,
-            diagnostic: getResumeDeliveryDiagnostic(getActiveChatContainer()),
-          });
-        }
-      }
-    },
+    remainingReceiptTimeout,
+    undefined,
     "resume",
     onLog,
   );
@@ -814,9 +887,7 @@ async function sendResumeAndWait(
     // 把脱敏诊断同时放入结果，用户无需打开 DevTools 才能判断卡在哪个阶段。
     const diagnostic = getResumeDeliveryDiagnostic(getActiveChatContainer());
     onLog?.("resume", "receipt-unknown", "简历回执未确认", {
-      dialogObserved: confirmationDialogObserved,
-      confirmationClicked,
-      dialogClosed: confirmationDialogClosed,
+      confirmationStage: "dialog-closed",
       diagnostic,
     });
     return {
