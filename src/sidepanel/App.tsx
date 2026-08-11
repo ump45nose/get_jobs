@@ -861,6 +861,33 @@ export function App() {
     }
   }
 
+  /**
+   * 从顶部快捷入口复用现有顺序投递三段动作，不创建第二套批次状态。
+   *
+   * @returns 当前状态对应的确认、启动或停止请求完成时返回。
+   */
+  async function handleHeroBatchAction(): Promise<void> {
+    if (batchActive) {
+      await stopBatch();
+      return;
+    }
+    if (batchProgress?.status === "confirming") {
+      await confirmBatchStart();
+      return;
+    }
+    requestBatchStart();
+  }
+
+  const heroBatchLabel = batchProgress?.status === "stopping"
+    ? "正在停止"
+    : batchActive
+      ? "停止投递"
+      : batchProgress?.status === "confirming"
+        ? "确认并开始"
+        : "顺序投递";
+  const heroBatchDisabled = batchProgress?.status === "stopping"
+    || (!batchActive && (busy || taskBusy || Boolean(pendingDraft)));
+
   return (
     <main className="app-shell">
       <header className="hero">
@@ -869,7 +896,17 @@ export function App() {
           <h1>猎聘投递助手</h1>
           <p>使用当前 Chrome 登录态，可单岗位确认，也可二次确认后顺序处理当前页。</p>
         </div>
-        <span className={`status status-${headerStatus.className}`}>{headerStatus.label}</span>
+        <div className="hero-actions">
+          <span className={`status status-${headerStatus.className}`}>{headerStatus.label}</span>
+          <button
+            className={batchActive ? "danger hero-batch-button" : "hero-batch-button"}
+            type="button"
+            onClick={() => void handleHeroBatchAction()}
+            disabled={heroBatchDisabled}
+          >
+            {heroBatchLabel}
+          </button>
+        </div>
       </header>
 
       <section className="panel compact-grid">

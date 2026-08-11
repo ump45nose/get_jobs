@@ -82,6 +82,20 @@ button.danger {
   line-height: 1.5;
 }
 
+.hero-actions {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: 9px;
+}
+
+.hero-batch-button {
+  min-width: 88px;
+  padding: 8px 11px;
+  white-space: nowrap;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.18);
+}
+
 .eyebrow,
 .label {
   display: block;
