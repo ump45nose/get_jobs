@@ -99,3 +99,85 @@ export function findLiepinResumeConfirmationButton(
   // 页面同时出现多个候选弹窗时拒绝自动操作，要求用户人工核对。
   return candidates.size === 1 ? Array.from(candidates)[0] : undefined;
 }
+
+/** 等待附件简历弹窗 DOM 变化时使用的配置。 */
+export interface LiepinResumeDialogWaitOptions {
+  /** 页面文档或测试 DOM 根节点。 */
+  root?: ParentNode;
+  /** 最长等待毫秒数。 */
+  timeoutMilliseconds: number;
+  /** 任务停止、验证出现或其它业务条件满足时提前中止。 */
+  shouldAbort?: () => boolean;
+  /** MutationObserver 未收到变化时的兜底轮询间隔。 */
+  pollMilliseconds?: number;
+}
+
+/**
+ * 等待简历弹窗发生一次 DOM/状态变化，同时用短轮询兜底未触发 MutationObserver 的属性更新。
+ *
+ * @param root 当前页面或测试根节点。
+ * @param timeoutMilliseconds 本次最长等待时长。
+ * @returns DOM 变化或兜底计时结束时返回。
+ */
+function waitForResumeDialogMutation(root: ParentNode, timeoutMilliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve();
+    };
+    const observer = new MutationObserver(finish);
+    const timer = setTimeout(finish, Math.max(1, timeoutMilliseconds));
+    // React Portal 可能替换整个按钮或只切换单选框/禁用样式，两类变化都需要唤醒重新定位。
+    observer.observe(root as Node, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "disabled", "aria-disabled", "aria-checked", "checked"],
+    });
+  });
+}
+
+/**
+ * 串行等待猎聘附件简历弹窗中的唯一可用确认按钮。
+ *
+ * @param options 等待根节点、超时、业务中止条件与轮询间隔。
+ * @returns 找到的当前按钮节点；超时或业务中止时返回 undefined。
+ */
+export async function waitForLiepinResumeConfirmationButton(
+  options: LiepinResumeDialogWaitOptions,
+): Promise<HTMLElement | undefined> {
+  const root = options.root ?? document;
+  const pollMilliseconds = Math.max(20, options.pollMilliseconds ?? 120);
+  const deadline = Date.now() + Math.max(0, options.timeoutMilliseconds);
+  while (Date.now() < deadline) {
+    if (options.shouldAbort?.()) return undefined;
+    const button = findLiepinResumeConfirmationButton(root);
+    if (button) return button;
+    await waitForResumeDialogMutation(root, Math.min(pollMilliseconds, deadline - Date.now()));
+  }
+  return options.shouldAbort?.() ? undefined : findLiepinResumeConfirmationButton(root);
+}
+
+/**
+ * 串行等待附件简历确认弹窗完全关闭，防止关闭动画期间提前读取聊天回执。
+ *
+ * @param options 等待根节点、超时、业务中止条件与轮询间隔。
+ * @returns 弹窗已经关闭时返回 true；超时或业务中止时返回 false。
+ */
+export async function waitForLiepinResumeConfirmationDialogToClose(
+  options: LiepinResumeDialogWaitOptions,
+): Promise<boolean> {
+  const root = options.root ?? document;
+  const pollMilliseconds = Math.max(20, options.pollMilliseconds ?? 120);
+  const deadline = Date.now() + Math.max(0, options.timeoutMilliseconds);
+  while (Date.now() < deadline) {
+    if (options.shouldAbort?.()) return false;
+    if (!isLiepinResumeConfirmationDialogVisible(root)) return true;
+    await waitForResumeDialogMutation(root, Math.min(pollMilliseconds, deadline - Date.now()));
+  }
+  return !options.shouldAbort?.() && !isLiepinResumeConfirmationDialogVisible(root);
+}
