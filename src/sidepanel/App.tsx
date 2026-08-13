@@ -240,6 +240,7 @@ export function App() {
   const [draftActivity, setDraftActivity] = useState<DraftActivity>("idle");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [heroBatchPreparing, setHeroBatchPreparing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [safety, setSafety] = useState<LiepinSafetyStatus>(EMPTY_SAFETY);
   const [aiDiagnostics, setAiDiagnostics] = useState<AiDiagnosticLog[]>([]);
@@ -304,15 +305,21 @@ export function App() {
     return next;
   }, []);
 
-  /** 重新识别当前标签页中的猎聘岗位卡片。 */
-  const inspectPage = useCallback(async () => {
+  /**
+   * 重新识别当前标签页中的猎聘岗位卡片。
+   *
+   * @returns 本次识别得到的页面快照；失败时返回空快照并保留错误提示。
+   */
+  const inspectPage = useCallback(async (): Promise<LiepinPageContext> => {
     try {
       const pageContext = await sendContent<LiepinPageContext>({ type: "INSPECT_LIEPIN" });
       setContext(pageContext);
       setNotice(pageContext.jobs.length ? `识别到 ${pageContext.jobs.length} 个岗位` : "当前页面尚未识别到岗位卡片");
+      return pageContext;
     } catch (error) {
       setContext(EMPTY_CONTEXT);
       setNotice(error instanceof Error ? `${error.message}；请刷新猎聘页面后重试` : String(error));
+      return EMPTY_CONTEXT;
     }
   }, []);
 
@@ -624,30 +631,37 @@ export function App() {
   /**
    * 统一检查批次启动前置条件，确保顶部直启与底部确认使用同一安全边界。
    *
+   * @param pageContext 用于本次启动的页面快照，顶部入口可传入刚识别的结果。
+   * @param candidateJobs 从同一页面快照提取的未联系岗位，避免混用旧 React 状态。
+   * @param safetyStatus 本次启动采用的额度与冷却状态。
    * @returns 可以启动时返回 undefined；否则返回面向用户的阻止原因。
    */
-  function getBatchStartIssue(): string | undefined {
+  function getBatchStartIssue(
+    pageContext: LiepinPageContext = context,
+    candidateJobs: LiepinJobSnapshot[] = batchCandidates,
+    safetyStatus: LiepinSafetyStatus = safety,
+  ): string | undefined {
     if (busy || taskBusy || batchActive) {
       return "当前仍有岗位任务，请等待完成或先停止";
     }
     if (pendingDraft) {
       return "请先确认或取消当前 AI 草稿";
     }
-    if (!context.supported || context.loggedIn !== true) {
+    if (!pageContext.supported || pageContext.loggedIn !== true) {
       return "请先在当前标签页登录猎聘并重新识别岗位";
     }
-    if (!batchCandidates.length) {
+    if (!candidateJobs.length) {
       return "当前页没有可顺序投递的新岗位；已显示“继续聊”的岗位会被跳过";
     }
-    if (safety.cooldownRemainingSeconds > 0) {
-      return `账号安全冷却中，约 ${safety.cooldownRemainingSeconds} 秒后可继续`;
+    if (safetyStatus.cooldownRemainingSeconds > 0) {
+      return `账号安全冷却中，约 ${safetyStatus.cooldownRemainingSeconds} 秒后可继续`;
     }
     const localRemainingDaily = Math.max(
       0,
-      normalizedBatchConfig.maxDailyDeliveries - safety.dailyDeliveries,
+      normalizedBatchConfig.maxDailyDeliveries - safetyStatus.dailyDeliveries,
     );
     const queueCount = Math.min(
-      batchCandidates.length,
+      candidateJobs.length,
       normalizedBatchConfig.maxBatchSize,
       localRemainingDaily,
     );
@@ -721,15 +735,23 @@ export function App() {
   }
 
   /**
-   * 在二次确认后按页面顺序生成并投递所有未联系岗位。
+   * 按指定页面快照顺序生成并投递所有未联系岗位。
    *
+   * @param pageContext 本次批次固定使用的页面识别快照，默认使用界面当前状态。
+   * @param safetyStatus 启动校验使用的安全状态，顶部入口传入刚刷新的结果。
    * @returns 批次完成、停止或遇到不确定结果时返回。
    */
-  async function confirmBatchStart() {
+  async function confirmBatchStart(
+    pageContext: LiepinPageContext = context,
+    safetyStatus: LiepinSafetyStatus = safety,
+  ) {
     let jobs: LiepinJobSnapshot[] = [];
     let completedCount = 0;
     let safeStopReason = "";
-    const issue = getBatchStartIssue();
+    // 候选岗位必须从传入快照同步计算，不能等待 setContext 的异步渲染。
+    const candidateJobs = pageContext.jobs.filter((job) => !job.buttonText?.includes("继续聊"));
+    const contactedJobCount = pageContext.jobs.length - candidateJobs.length;
+    const issue = getBatchStartIssue(pageContext, candidateJobs, safetyStatus);
     if (issue) {
       setNotice(issue);
       return;
@@ -742,17 +764,17 @@ export function App() {
       const initialSafety = await refreshSafetyStatus();
       if (initialSafety.blockedReason) throw new Error(initialSafety.blockedReason);
       const allowedCount = Math.min(
-        batchCandidates.length,
+        candidateJobs.length,
         saved.config.batch.maxBatchSize,
         initialSafety.remainingDailyDeliveries,
       );
-      jobs = batchCandidates.slice(0, allowedCount);
+      jobs = candidateJobs.slice(0, allowedCount);
       const tab = await getActiveTab();
       const tabHost = tab.url ? new URL(tab.url).hostname : "";
       if (!tab.id || (tabHost !== "liepin.com" && !tabHost.endsWith(".liepin.com"))) {
         throw new Error("请保持需要投递的猎聘岗位列表页为当前活动标签页");
       }
-      if (!jobs.length) throw new Error("确认后未找到可顺序投递的岗位，请重新识别");
+      if (!jobs.length) throw new Error("重新识别后未找到可顺序投递的岗位");
 
       setBusy(false);
       for (let index = 0; index < jobs.length; index += 1) {
@@ -846,7 +868,7 @@ export function App() {
           completed: jobs.length,
           message: `当前页 ${jobs.length} 个新岗位已按顺序处理完成`,
         });
-        setNotice(`当前页顺序投递完成；另跳过 ${knownContactedJobs.length} 个已联系岗位`);
+        setNotice(`当前页顺序投递完成；另跳过 ${contactedJobCount} 个已联系岗位`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -884,7 +906,7 @@ export function App() {
   }
 
   /**
-   * 顶部快捷入口一次点击直接启动顺序投递；运行中同一位置用于停止。
+   * 顶部快捷入口先重新识别当前页并刷新安全状态，再直接启动顺序投递；运行中用于停止。
    *
    * @returns 当前状态对应的直接启动或停止请求完成时返回。
    */
@@ -893,15 +915,37 @@ export function App() {
       await stopBatch();
       return;
     }
-    await confirmBatchStart();
+    if (heroBatchPreparing) return;
+
+    setHeroBatchPreparing(true);
+    setBusy(true);
+    setNotice("正在重新识别当前页面并刷新安全状态…");
+    try {
+      // 两项只读刷新可并行执行，批次随后直接使用返回值，不依赖 React 下一次渲染。
+      const [pageContext, safetyStatus] = await Promise.all([
+        inspectPage(),
+        refreshSafetyStatus(),
+      ]);
+      setHeroBatchPreparing(false);
+      setBusy(false);
+      await confirmBatchStart(pageContext, safetyStatus);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHeroBatchPreparing(false);
+      setBusy(false);
+    }
   }
 
   const heroBatchLabel = batchProgress?.status === "stopping"
     ? "正在停止"
     : batchActive
       ? "停止投递"
-      : "顺序投递";
+      : heroBatchPreparing
+        ? "正在识别"
+        : "顺序投递";
   const heroBatchDisabled = batchProgress?.status === "stopping"
+    || heroBatchPreparing
     || (!batchActive && (busy || taskBusy || Boolean(pendingDraft)));
 
   return (
@@ -910,7 +954,7 @@ export function App() {
         <div>
           <p className="eyebrow">GET JOBS · LIEPIN MVP</p>
           <h1>猎聘投递助手</h1>
-          <p>使用当前 Chrome 登录态，可单岗位确认，也可二次确认后顺序处理当前页。</p>
+          <p>使用当前 Chrome 登录态；顶部单击会先自动重新识别，再直接顺序处理当前页。</p>
         </div>
         <div className="hero-actions">
           <span className={`status status-${headerStatus.className}`}>{headerStatus.label}</span>
@@ -1388,7 +1432,7 @@ export function App() {
         </div>
         <p className="privacy-note">
           当前识别 {context.jobs.length} 个岗位；可处理 {batchCandidates.length} 个，跳过 {knownContactedJobs.length} 个“继续聊”。
-          动作间等待同时用于单岗位和批量投递；批量模式会在二次确认后逐岗生成 AI 文本并直接发送，不逐岗弹出草稿预览。
+          动作间等待同时用于单岗位和批量投递；顶部入口自动重新识别后直启，底部入口确认后启动，均逐岗生成 AI 文本并直接发送。
         </p>
         {batchProgress && (
           <div className={`batch-progress batch-${batchProgress.status}`}>
@@ -1401,7 +1445,7 @@ export function App() {
             {batchProgress.status === "confirming" && (
               <div className="button-row draft-actions">
                 <button className="ghost" type="button" onClick={cancelBatchStart}>取消</button>
-                <button type="button" onClick={confirmBatchStart}>确认并开始</button>
+                <button type="button" onClick={() => void confirmBatchStart()}>确认并开始</button>
               </div>
             )}
           </div>
