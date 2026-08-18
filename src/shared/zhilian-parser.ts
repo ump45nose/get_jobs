@@ -5,6 +5,8 @@ export const ZHILIAN_JOB_CARD_SELECTORS = [
   "div.joblist-box__item",
   ".joblist-box__item",
   "[class*='joblist-box__item']",
+  ".job-list-panel .job-card",
+  ".job-card",
 ] as const;
 
 /** 智联申请按钮的已知选择器。 */
@@ -12,6 +14,14 @@ export const ZHILIAN_APPLY_BUTTON_SELECTORS = [
   "button.collect-and-apply__btn",
   "button[class*='collect-and-apply']",
 ] as const;
+
+/** 智联新版左右分栏页面中，右侧岗位详情的稳定字段选择器。 */
+export const ZHILIAN_DETAIL_SELECTORS = {
+  title: ".job-detail-summary__title-text",
+  salary: ".job-detail-summary__salary",
+  company: ".job-detail-summary__company-name",
+  applyButton: "button.job-detail-summary__apply",
+} as const;
 
 /** 只读取当前申请工作流、对话框和短消息，避免全页其它岗位文本造成误判。 */
 export const ZHILIAN_OUTCOME_SCOPE_SELECTORS = [
@@ -86,6 +96,16 @@ function readText(root: ParentNode, selectors: readonly string[]): string | unde
   return undefined;
 }
 
+/** 判断岗位标签是否属于学历要求。 */
+function isEducationText(value: string): boolean {
+  return /学历不限|不限学历|初中|高中|中专|大专|本科|硕士|博士/.test(value);
+}
+
+/** 判断岗位标签是否属于工作经验要求。 */
+function isExperienceText(value: string): boolean {
+  return /经验不限|不限经验|应届|在校|实习|无经验|\d+(?:-\d+)?年|[一二三四五六七八九十]+年/.test(value);
+}
+
 /** 返回首个岗位卡片选择器命中的去重节点。 */
 export function findZhilianJobCards(root: ParentNode): Element[] {
   for (const selector of ZHILIAN_JOB_CARD_SELECTORS) {
@@ -98,22 +118,35 @@ export function findZhilianJobCards(root: ParentNode): Element[] {
 /** 从智联搜索结果 DOM 中解析当前可见岗位快照。 */
 export function parseZhilianJobs(root: ParentNode): ZhilianJobSnapshot[] {
   return findZhilianJobCards(root).flatMap((card, index) => {
-    const titleLink = card.querySelector<HTMLAnchorElement>("a.jobinfo__name, a[class*='jobinfo__name']");
-    const jobTitle = normalizeText(titleLink?.textContent);
+    const titleElement = card.querySelector<HTMLElement>(
+      "a.jobinfo__name, a[class*='jobinfo__name'], .job-card__title-main",
+    );
+    const jobTitle = normalizeText(titleElement?.textContent);
     if (!jobTitle) return [];
 
-    const rawLink = titleLink?.getAttribute("href") || undefined;
+    const rawLink = titleElement?.getAttribute("href") || undefined;
     const jobLink = rawLink ? new URL(rawLink, card.ownerDocument.baseURI).href : undefined;
     const jobId = extractZhilianJobId(jobLink);
     const otherItems = Array.from(card.querySelectorAll(".jobinfo__other-info-item"))
       .map((item) => normalizeText(item.textContent))
       .filter(Boolean);
+    const skillTags = Array.from(card.querySelectorAll(".job-card__skill-tag"))
+      .map((item) => normalizeText(item.textContent))
+      .filter(Boolean);
     // 不使用 :nth-child()：卡片前置标题、薪资节点会改变全局子节点序号。
-    const jobArea = otherItems[0];
-    const jobExpReq = otherItems[1];
-    const jobEduReq = otherItems[2];
-    const compName = readText(card, [".companyinfo__name", "[class*='companyinfo__name']"]);
-    const jobSalaryText = readText(card, [".jobinfo__salary", "[class*='jobinfo__salary']"]);
+    const jobArea = readText(card, [".job-card__location"]) ?? otherItems[0];
+    const jobExpReq = skillTags.find(isExperienceText) ?? otherItems[1];
+    const jobEduReq = skillTags.find(isEducationText) ?? otherItems[2];
+    const compName = readText(card, [
+      ".companyinfo__name",
+      "[class*='companyinfo__name']",
+      ".job-card__company-name",
+    ]);
+    const jobSalaryText = readText(card, [
+      ".jobinfo__salary",
+      "[class*='jobinfo__salary']",
+      ".job-card__salary",
+    ]);
     const buttonText = readText(card, ZHILIAN_APPLY_BUTTON_SELECTORS);
     const fingerprint = createFingerprint([jobId, jobTitle, compName, jobArea, jobSalaryText]);
 
@@ -131,6 +164,25 @@ export function parseZhilianJobs(root: ParentNode): ZhilianJobSnapshot[] {
       buttonText,
     }];
   });
+}
+
+/**
+ * 判断智联新版右侧详情是否已经绑定指定岗位。
+ *
+ * @param root 当前文档或详情容器。
+ * @param job 待操作的岗位快照。
+ * @returns 标题与已知公司都匹配时返回 true。
+ */
+export function isZhilianDetailBoundToJob(root: ParentNode, job: ZhilianJobSnapshot): boolean {
+  const detailTitle = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.title)?.textContent);
+  if (!detailTitle || detailTitle !== normalizeText(job.jobTitle)) return false;
+
+  const detailCompany = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.company)?.textContent);
+  if (job.compName && (!detailCompany || detailCompany !== normalizeText(job.compName))) return false;
+
+  const detailSalary = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.salary)?.textContent);
+  // 新版列表没有岗位 ID，因此已知薪资也必须一致，降低同公司同岗位名误绑定风险。
+  return !job.jobSalaryText || (Boolean(detailSalary) && detailSalary === normalizeText(job.jobSalaryText));
 }
 
 /** 解析单个已定位的智联岗位卡片，供动作前再次按稳定键核对。 */
