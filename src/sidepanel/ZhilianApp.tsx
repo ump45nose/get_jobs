@@ -92,6 +92,7 @@ export function ZhilianApp() {
   const [batchProgress, setBatchProgress] = useState<ZhilianBatchProgress | null>(null);
   const [notice, setNotice] = useState("正在读取智联页面…");
   const [busy, setBusy] = useState(false);
+  const [heroBatchPreparing, setHeroBatchPreparing] = useState(false);
   const batchStopRequested = useRef(false);
 
   const batchActive = batchProgress?.status === "running" || batchProgress?.status === "waiting";
@@ -221,10 +222,18 @@ export function ZhilianApp() {
     return !batchStopRequested.current;
   }
 
-  /** 一次点击冻结当前页岗位快照，并按安全配额顺序执行。 */
-  async function startBatch(): Promise<void> {
+  /**
+   * 冻结指定页面快照，并按安全配额顺序执行。
+   *
+   * @param pageContext 本次批次固定使用的页面识别结果，顶部入口传入刚刷新的快照。
+   */
+  async function startBatch(pageContext: ZhilianPageContext = context): Promise<void> {
     if (taskBusy) return setNotice("已有任务正在执行，请等待完成或先停止");
-    if (context.loggedIn !== true) return setNotice("请先确认智联已登录，再重新识别页面");
+    if (!pageContext.supported) return setNotice(pageContext.issue || "当前活动标签页不是智联岗位列表页");
+    if (pageContext.loggedIn !== true) return setNotice("请先确认智联已登录，再重新识别页面");
+    if (!pageContext.jobs.length) return setNotice(pageContext.issue || "当前页未识别到可投递岗位");
+    // 必须从同一快照提取队列，不能在 setContext 尚未完成渲染时读取旧 candidates。
+    const pageCandidates = pageContext.jobs.filter((job) => !/已投递|已申请/.test(job.buttonText ?? ""));
     batchStopRequested.current = false;
     let activeTaskId: string | undefined;
     try {
@@ -235,11 +244,11 @@ export function ZhilianApp() {
       const state = await sendBackground<ZhilianAppState>({ type: "GET_ZHILIAN_APP_STATE" });
       if (state.safety.blockedReason) throw new Error(state.safety.blockedReason);
       const allowed = Math.min(
-        candidates.length,
+        pageCandidates.length,
         saved.batch.maxBatchSize,
         state.safety.remainingDailyDeliveries,
       );
-      const queue = candidates.slice(0, allowed);
+      const queue = pageCandidates.slice(0, allowed);
       if (!queue.length) throw new Error("当前页没有可投递的新岗位，或今日安全额度已用完");
       setBatchProgress({ status: "running", completed: 0, total: queue.length, message: "顺序投递已开始" });
 
@@ -300,6 +309,37 @@ export function ZhilianApp() {
     }
   }
 
+  /**
+   * 顶部与正文共用的一键入口：先识别最新岗位，再直接启动顺序投递；运行中用于停止。
+   */
+  async function handleBatchAction(): Promise<void> {
+    if (batchActive || task.status === "running") {
+      await stopTask();
+      return;
+    }
+    if (heroBatchPreparing || task.status === "stopping") return;
+
+    setHeroBatchPreparing(true);
+    setBusy(true);
+    setNotice("正在重新识别智联岗位并刷新安全状态…");
+    try {
+      // 同时刷新页面快照与后台状态，随后直接消费返回值而不是等待 React 再渲染。
+      const [page, state] = await Promise.all([inspectPage(), loadState()]);
+      setHeroBatchPreparing(false);
+      setBusy(false);
+      if (state.task.status === "running" || state.task.status === "stopping") {
+        setNotice("已有智联任务正在执行，请等待完成或先停止");
+        return;
+      }
+      await startBatch(page);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHeroBatchPreparing(false);
+      setBusy(false);
+    }
+  }
+
   /** 停止当前单岗位或顺序投递，并通知结果子标签停止后续动作。 */
   async function stopTask(): Promise<void> {
     batchStopRequested.current = true;
@@ -319,15 +359,37 @@ export function ZhilianApp() {
     }));
   }
 
+  const batchActionActive = batchActive || task.status === "running";
+  const heroBatchLabel = task.status === "stopping"
+    ? "正在停止"
+    : batchActionActive
+      ? "停止投递"
+      : heroBatchPreparing
+        ? "正在识别"
+        : "顺序投递";
+  const heroBatchDisabled = task.status === "stopping"
+    || heroBatchPreparing
+    || (!batchActionActive && busy);
+
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
           <p className="eyebrow">GET JOBS · ZHILIAN</p>
           <h1>智联投递助手</h1>
-          <p>一次点击使用智联默认简历投递，等待明确回执后关闭成功页。</p>
+          <p>顶部单击会先重新识别当前页，再使用智联默认简历顺序投递。</p>
         </div>
-        <span className={`status status-${task.status}`}>{statusLabel(task.status)}</span>
+        <div className="hero-actions">
+          <span className={`status status-${task.status}`}>{statusLabel(task.status)}</span>
+          <button
+            className={batchActionActive ? "danger hero-batch-button" : "hero-batch-button"}
+            type="button"
+            disabled={heroBatchDisabled}
+            onClick={() => void handleBatchAction()}
+          >
+            {heroBatchLabel}
+          </button>
+        </div>
       </section>
 
       <section className="panel compact">
@@ -358,9 +420,9 @@ export function ZhilianApp() {
       <section className="panel batch-panel">
         <div className="section-title">
           <div><span className="eyebrow">当前页面</span><h2>一键顺序投递</h2></div>
-          {batchActive || task.status === "running"
+          {batchActionActive
             ? <button className="danger" type="button" onClick={() => void stopTask()}>停止</button>
-            : <button type="button" disabled={taskBusy || !candidates.length} onClick={() => void startBatch()}>顺序投递当前页</button>}
+            : <button type="button" disabled={heroBatchPreparing || task.status === "stopping"} onClick={() => void handleBatchAction()}>识别并顺序投递</button>}
         </div>
         <div className={`safety-summary ${safety.blockedReason ? "safety-blocked" : ""}`}>
           <strong>今日新投递 {safety.dailyDeliveries}/{config.batch.maxDailyDeliveries}</strong>
