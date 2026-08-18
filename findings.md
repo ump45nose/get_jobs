@@ -1,5 +1,15 @@
 # 迁移发现
 
+## 2026-08-18 智联岗位识别与顶部直启
+
+- 智联当前解析入口为 `src/shared/zhilian-parser.ts`，Content Script 的 `inspectPage()` 仅在智联域调用该解析器；提示“尚未识别”说明域名识别正常但解析结果为空。
+- `ZhilianApp.tsx` 已让 `inspectPage()` 返回 `ZhilianPageContext`，但现有 `startBatch()` 没有接收快照参数，若直接照搬“先识别再启动”仍可能读取 React 上一次渲染中的旧岗位列表。
+- 智联顶部目前没有批次快捷按钮，正文“一键顺序投递”直接使用旧 `candidates`；目标应是顶部单击执行“重新识别 → 使用返回快照过滤已投递岗位 → 直接启动”，运行中同一位置允许停止。
+- 2026-08-18 对用户当前 `/jobs/?pageMode=recommend` 页面只读核验确认：旧 `.joblist-box__item`、`a.jobinfo__name`、`button.collect-and-apply__btn` 数量均为 0；新版列表稳定结构为 `.job-list-panel` 下 20 个 `.job-card`。
+- 新版字段类名为 `.job-card__title-main`、`.job-card__salary`、`.job-card__skill-tag`、`.job-card__company-name`、`.job-card__location`；卡片自身无岗位链接和申请按钮，当前选中卡片以 `.job-card--active` 标识。
+- 新版“立即投递”只存在右侧详情区，按钮为 `.job-detail-summary__apply`；因此不能仅补解析选择器，投递动作还必须变为“定位并点击列表卡片 → 等待右侧详情与目标岗位匹配 → 点击详情区唯一申请按钮”。
+- 新版卡片没有岗位 ID 属性或详情链接，可继续用标题、公司、地区、薪资生成稳定指纹；动作前按 `cardKey` 重新定位，详情绑定至少校验标题与公司，避免右侧仍停留在上一个岗位时误投。
+
 ## 2026-08-13 猎聘顶部直启前自动识别
 
 - 顶部“顺序投递”不能只串行调用现有 `inspectPage()` 与 `confirmBatchStart()`：前者仅执行 `setContext()`，React 状态更新异步，后者在同一事件闭包中仍可能读取旧 `context` 与旧 `batchCandidates`。
