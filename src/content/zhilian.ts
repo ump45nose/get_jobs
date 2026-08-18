@@ -1,11 +1,13 @@
 import { mountEmbeddedPanel, type EmbeddedPanelController } from "./embedded-panel";
 import {
   ZHILIAN_APPLY_BUTTON_SELECTORS,
+  ZHILIAN_DETAIL_SELECTORS,
   ZHILIAN_OUTCOME_SCOPE_SELECTORS,
   detectZhilianLoginState,
   detectZhilianAppliedPageOutcome,
   detectZhilianOutcomeFromText,
   findZhilianJobCards,
+  isZhilianDetailBoundToJob,
   parseZhilianJobCard,
   parseZhilianJobs,
 } from "../shared/zhilian-parser";
@@ -106,6 +108,61 @@ function findApplyButton(card: Element): HTMLButtonElement | null {
       const text = (candidate.textContent ?? "").replace(/\s+/g, "").trim();
       return APPLY_TEXTS.has(text) || ALREADY_APPLIED_TEXTS.has(text);
     }) ?? null;
+}
+
+/**
+ * 在新版右侧详情中寻找与指定岗位绑定的申请按钮。
+ *
+ * @param job 当前冻结的目标岗位。
+ * @returns 详情标题和公司匹配时返回唯一申请按钮，否则返回 null。
+ */
+function findBoundDetailApplyButton(job: ZhilianJobSnapshot): HTMLButtonElement | null {
+  if (!isZhilianDetailBoundToJob(document, job)) return null;
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(ZHILIAN_DETAIL_SELECTORS.applyButton));
+  if (buttons.length !== 1) return null;
+  const text = (buttons[0].textContent ?? "").replace(/\s+/g, "").trim();
+  return APPLY_TEXTS.has(text) || ALREADY_APPLIED_TEXTS.has(text) ? buttons[0] : null;
+}
+
+/**
+ * 兼容旧版卡片内按钮和新版右侧详情按钮。
+ *
+ * @param target 已通过稳定键重新定位的目标卡片。
+ * @returns 当前与岗位绑定的申请按钮。
+ */
+function findApplyButtonForJob(target: { card: Element; job: ZhilianJobSnapshot }): HTMLButtonElement | null {
+  return findApplyButton(target.card) ?? findBoundDetailApplyButton(target.job);
+}
+
+/**
+ * 激活新版左侧卡片，并等待右侧详情明确切换到目标岗位。
+ *
+ * @param target 已通过稳定键定位的目标岗位卡片。
+ * @param config 保存时冻结的智联配置。
+ * @returns 旧版卡片内按钮或新版详情区按钮。
+ */
+async function prepareApplyButton(
+  target: { card: Element; job: ZhilianJobSnapshot },
+  config: ZhilianConfig,
+): Promise<HTMLButtonElement> {
+  const embeddedButton = findApplyButton(target.card);
+  if (embeddedButton) return embeddedButton;
+  if (!target.card.matches(".job-card")) {
+    throw new Error("未找到该岗位的“立即投递”按钮，请刷新页面后重试");
+  }
+
+  // 新版页面必须先模拟用户选择左侧岗位，再读取右侧详情；不能直接点击上一个岗位的按钮。
+  await waitAction(config);
+  (target.card as HTMLElement).click();
+  const deadline = Date.now() + Math.min(10_000, config.batch.resumeReceiptTimeoutSeconds * 1_000);
+  while (Date.now() < deadline) {
+    if (stopRequested) throw new Error("智联任务已停止");
+    const refreshed = findJobCard(target.job.cardKey);
+    const button = refreshed ? findApplyButtonForJob(refreshed) : null;
+    if (button) return button;
+    if (!(await wait(100))) throw new Error("智联任务已停止");
+  }
+  throw new Error("点击岗位后未能确认右侧详情已切换到目标岗位，未执行投递");
 }
 
 /** 收集当前可见申请工作流的文本证据。 */
@@ -267,26 +324,36 @@ async function applySingleJob(
   if (activeTaskId) throw new Error("当前页面已有智联任务正在运行");
   const target = findJobCard(cardKey);
   if (!target) throw new Error("岗位列表已变化，请重新识别后再投递");
-  const button = findApplyButton(target.card);
-  if (!button) throw new Error("未找到该岗位的“立即投递”按钮，请刷新页面后重试");
-  const initialText = (button.textContent ?? "").replace(/\s+/g, "").trim();
-  if (ALREADY_APPLIED_TEXTS.has(initialText)) {
-    return buildResult(target.job, { outcome: "already-applied", evidence: initialText });
-  }
-  if (!APPLY_TEXTS.has(initialText) || button.disabled) {
-    throw new Error("岗位申请按钮不可用，未执行点击");
-  }
 
   activeTaskId = taskId;
   stopRequested = false;
   try {
-    // 单次点击授权后，滚动与真正申请之间仍保留随机动作等待。
+    // 单次点击授权后，滚动、选择卡片与真正申请之间仍保留随机动作等待。
     target.card.scrollIntoView({ behavior: "smooth", block: "center" });
+    let button = await prepareApplyButton(target, config);
+    const initialText = (button.textContent ?? "").replace(/\s+/g, "").trim();
+    if (ALREADY_APPLIED_TEXTS.has(initialText)) {
+      return buildResult(target.job, { outcome: "already-applied", evidence: initialText });
+    }
+    if (!APPLY_TEXTS.has(initialText) || button.disabled) {
+      throw new Error("岗位申请按钮不可用，未执行点击");
+    }
+
     const baselineOutcomeTexts = new Set(collectScopedOutcomeTexts());
     const knownExternalTabIds = await listKnownExternalTabs().catch(() => []);
     if (!(await wait(randomActionDelayMilliseconds(config.batch)))) {
       return { outcome: "cancelled", message: "任务已在点击前停止", job: target.job };
     }
+    // 等待期间站点可能重绘详情按钮，点击前必须再次绑定当前岗位并获取实时节点。
+    const refreshedBeforeClick = findJobCard(cardKey);
+    const liveButton = refreshedBeforeClick ? findApplyButtonForJob(refreshedBeforeClick) : null;
+    if (!liveButton
+      || !liveButton.isConnected
+      || liveButton.disabled
+      || !APPLY_TEXTS.has((liveButton.textContent ?? "").replace(/\s+/g, "").trim())) {
+      throw new Error("目标岗位申请按钮在点击前发生变化，未执行投递");
+    }
+    button = liveButton;
     button.click();
 
     const deadline = Date.now() + config.batch.resumeReceiptTimeoutSeconds * 1_000;
@@ -296,7 +363,9 @@ async function applySingleJob(
       if (current.outcome !== "unknown") return buildResult(target.job, current);
 
       const refreshed = findJobCard(cardKey);
-      const refreshedText = refreshed ? (findApplyButton(refreshed.card)?.textContent ?? "").replace(/\s+/g, "").trim() : "";
+      const refreshedText = refreshed
+        ? (findApplyButtonForJob(refreshed)?.textContent ?? "").replace(/\s+/g, "").trim()
+        : "";
       if (ALREADY_APPLIED_TEXTS.has(refreshedText)) {
         // 按钮回执先出现时再等待一个动作间隔，给成功弹窗渲染和关闭留出时间。
         if (!(await wait(randomActionDelayMilliseconds(config.batch)))) {
