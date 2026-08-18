@@ -5,6 +5,7 @@ import {
   detectZhilianAppliedPageOutcome,
   detectZhilianOutcomeFromText,
   extractZhilianJobId,
+  isZhilianDetailBoundToJob,
   parseZhilianJobs,
 } from "./zhilian-parser";
 
@@ -65,6 +66,62 @@ describe("parseZhilianJobs", () => {
   it("跳过缺少岗位名称的装饰卡片", () => {
     document.body.innerHTML = `<div class="joblist-box__item"><button>立即投递</button></div>`;
     expect(parseZhilianJobs(document)).toEqual([]);
+  });
+
+  it("解析新版左右分栏页面的岗位卡片", () => {
+    document.body.innerHTML = `
+      <div class="job-list-panel">
+        <div class="job-card job-card--active">
+          <div class="job-card__title-main">高级后端架构师</div>
+          <span class="job-card__salary">3-5万</span>
+          <div class="job-card__skill-tags">
+            <span class="job-card__skill-tag">本科</span>
+            <span class="job-card__skill-tag">5-10年</span>
+            <span class="job-card__skill-tag">Java</span>
+          </div>
+          <a class="job-card__company-name">辉瑞投资有限公司</a>
+          <div class="job-card__location">杭州 上城 小营</div>
+        </div>
+      </div>`;
+
+    const jobs = parseZhilianJobs(document);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      jobTitle: "高级后端架构师",
+      jobSalaryText: "3-5万",
+      jobArea: "杭州 上城 小营",
+      jobExpReq: "5-10年",
+      jobEduReq: "本科",
+      compName: "辉瑞投资有限公司",
+    });
+    expect(jobs[0].cardKey).toMatch(/^zhilian:/);
+  });
+});
+
+describe("isZhilianDetailBoundToJob", () => {
+  it("仅在新版详情标题和公司都匹配时通过", () => {
+    const [job] = (() => {
+      document.body.innerHTML = `
+        <div class="job-card">
+          <div class="job-card__title-main">AI Agent 工程师</div>
+          <div class="job-card__salary">25-40K</div>
+          <div class="job-card__company-name">示例科技</div>
+          <div class="job-card__location">杭州</div>
+        </div>`;
+      return parseZhilianJobs(document);
+    })();
+    document.body.innerHTML = `
+      <span class="job-detail-summary__title-text">AI Agent 工程师</span>
+      <span class="job-detail-summary__salary">25-40K</span>
+      <a class="job-detail-summary__company-name">示例科技</a>`;
+
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(true);
+    document.querySelector(".job-detail-summary__company-name")!.textContent = "其它公司";
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+    document.querySelector(".job-detail-summary__company-name")!.textContent = "示例科技";
+    document.querySelector(".job-detail-summary__salary")!.textContent = "15-20K";
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
   });
 });
 
