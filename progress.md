@@ -1,5 +1,17 @@
 # 进度记录
 
+## 2026-08-22
+
+- 用户要求把当前成果推送到 Git，并拉取 fork 对应原分支的数据、处理冲突。
+- 当前 `get_jobs-extension` 工作区干净、位于 `main`，但仓库没有配置任何 remote，也没有本地上游跟踪关系；必须先从相邻仓库或已配置凭据确定 fork/original 地址。
+- 本机未安装 `gh`，后续改用 Git 原生 remote/fetch/pull/push 完成同步，不再重复调用 GitHub CLI。
+- 已从相邻仓库确认 get_jobs 的 fork/original 地址；同时发现 `boss-helper-v2` 另有一场正在进行的上游合并冲突，本轮暂不触碰，先验证当前 extension 与 get_jobs 是否具有共同历史。
+- 共同历史验证失败：extension 是独立 Git 历史，不能安全合并 Java 原仓库 main；准备把它发布到 fork 的独立分支，并继续核对真正需要完成的 fork 上游合并现场。
+- `get_jobs-extension` 已推送到 `origin/codex/get-jobs-extension`，没有覆盖 Java 项目的 `main`；本地 `main` 跟踪该远端独立分支。
+- `D:\Github\get_jobs` 已获取 origin/upstream 最新引用，`upstream/main...main` 为 `0 4`，说明 fork 主分支不落后原仓库且无需冲突处理。
+- `D:\Github\boss-helper-v2` 已把 `upstream/main` 合并到 `codex/boss-helper-v2`，解决 22 个冲突并保留 V2 安全语义；合并提交 `68d3683` 与子模块类型检查修复 `1e77470` 均已推送。
+- 阶段 41 完成：三个相关仓库均已核对；实际存在的上游冲突已处理，所有待交付提交均已进入用户 fork。
+
 ## 2026-08-18
 
 - 用户反馈智联当前返回“尚未识别到岗位卡片”，要求恢复岗位信息解析，并参考猎聘增加“一键识别并顺序投递”。
