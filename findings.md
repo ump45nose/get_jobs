@@ -1,5 +1,19 @@
 # 迁移发现
 
+## 2026-08-22 Git fork 同步
+
+- `D:\Github\get_jobs-extension` 当前 `main` 位于 `9459f9e`，工作区干净，但 `git remote -v`、分支跟踪配置均为空；它不是一个已配置 fork 关系的本地仓库。
+- 在没有 remote 的情况下直接执行 pull/push 会无法确定目标，需先从相邻 `get_jobs` 仓库的 remote、系统 Git 凭据或用户 GitHub 仓库信息确定 `origin`（用户 fork）与 `upstream`（原仓库）。
+- 本机没有 `gh` 可执行文件，因此不能依赖 GitHub CLI 创建/查询 fork；优先复用 Git 原生命令和既有认证。
+- 相邻 `D:\Github\get_jobs` 已配置明确 fork 关系：`origin=https://github.com/ump45nose/get_jobs.git`，`upstream=https://github.com/loks666/get_jobs.git`；本地 `main` 与记录的 `upstream/main` 相比为上游 0、本地 4，且工作区干净。
+- `D:\Github\boss-helper-v2` 也有 fork/upstream，但当前正处于合并 `upstream/main` 的大量未解决冲突状态；这属于另一个仓库，不能在未确认目标前把 get_jobs-extension 的推送任务误切到 BOSS 仓库。
+- `get_jobs-extension` 有 338 个提交，说明它很可能沿用了 get_jobs 历史而只是缺失 remote；下一步需用 merge-base 验证共同祖先，再安全补回相同的 origin/upstream。
+- merge-base 验证否定了上述推测：extension 无法解析 get_jobs 的 `f809428`，自身根提交为 `ddaa4ed`，两者是无共同祖先的独立仓库。把 `upstream/main` 强行 pull 到 extension 会制造无意义的全仓冲突，禁止这样处理。
+- 安全发布方式是把 extension 推到用户 fork 的独立分支（不覆盖 Java 主分支）；fork 原分支同步与冲突处理应在真正具有 upstream 关系的对应仓库中完成。
+- extension 已按上述策略发布到 `ump45nose/get_jobs` 的 `codex/get-jobs-extension` 分支；Java `main` 保持原有历史。
+- Java fork 获取最新引用后相对 `loks666/get_jobs:main` 为上游 0、本地 4，无需额外 merge。
+- 真正存在冲突的 `boss-helper-v2` 已合并 `Ocyss/boss-helper:main`：22 个冲突以 V2 独立命名空间、默认关闭自动投递、日志脱敏、图片简历和限流为优先完成取舍，并推送到 `ump45nose/boss-helper-v2:codex/boss-helper-v2`。
+
 ## 2026-08-18 智联岗位识别与顶部直启
 
 - 智联当前解析入口为 `src/shared/zhilian-parser.ts`，Content Script 的 `inspectPage()` 仅在智联域调用该解析器；提示“尚未识别”说明域名识别正常但解析结果为空。
@@ -309,12 +323,12 @@
 
 ### 合并方案比较
 
-| 方案 | 结论 | 主要原因 |
-|---|---|---|
-| 以 BOSS/WXT 为宿主，猎聘 React iframe 暂时保留 | 推荐 | WXT 官方支持多个 Content Script、unlisted iframe page 和额外 React Vite plugin；迁移面最小，能保持两个已验收 UI/状态机 |
-| 以 BOSS/WXT 为宿主，同时把猎聘 UI 重写为 Vue | 后续优化 | 长期技术栈统一，但首次合并会额外重写约 1,300 行 UI，真实投递回归面无必要扩大 |
-| 以猎聘 Vite/React 为宿主迁入 BOSS | 不推荐 | 需要搬迁约 1.3 万行 BOSS/WXT/Vue/MAIN-world/MQTT 代码并重建多浏览器发布体系 |
-| 直接拼接两个现有 dist/ZIP | 不可持续 | Manifest、Service Worker、扩展身份、存储、工具栏和更新链无法仅靠文件复制正确合并 |
+| 方案                                           | 结论     | 主要原因                                                                                                               |
+| ---------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 以 BOSS/WXT 为宿主，猎聘 React iframe 暂时保留 | 推荐     | WXT 官方支持多个 Content Script、unlisted iframe page 和额外 React Vite plugin；迁移面最小，能保持两个已验收 UI/状态机 |
+| 以 BOSS/WXT 为宿主，同时把猎聘 UI 重写为 Vue   | 后续优化 | 长期技术栈统一，但首次合并会额外重写约 1,300 行 UI，真实投递回归面无必要扩大                                           |
+| 以猎聘 Vite/React 为宿主迁入 BOSS              | 不推荐   | 需要搬迁约 1.3 万行 BOSS/WXT/Vue/MAIN-world/MQTT 代码并重建多浏览器发布体系                                            |
+| 直接拼接两个现有 dist/ZIP                      | 不可持续 | Manifest、Service Worker、扩展身份、存储、工具栏和更新链无法仅靠文件复制正确合并                                       |
 
 ### 推荐的首期目录与运行边界
 
