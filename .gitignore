@@ -58,3 +58,11 @@ dist/
 
 # Gradle cache
 .gradle/
+
+# Chrome extension dependencies, build output, test coverage, and logs
+node_modules/
+dist/
+coverage/
+*.log
+.idea/
+.vscode/

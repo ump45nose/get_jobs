@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Get Jobs - 求职助手",
+  "version": "0.5.7",
+  "description": "在用户当前登录的 Chrome 中提供猎聘与智联投递闭环及安全顺序处理。",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "tabs", "alarms"],
+  "host_permissions": [
+    "https://*.liepin.com/*",
+    "https://liepin.com/*",
+    "https://*.zhaopin.com/*",
+    "https://zhaopin.com/*"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "显示或收起 Get Jobs 求职助手"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["sidepanel.html", "assets/*"],
+      "matches": ["https://*.liepin.com/*", "https://liepin.com/*"]
+    },
+    {
+      "resources": ["sidepanel.html", "assets/*"],
+      "matches": ["https://*.zhaopin.com/*", "https://zhaopin.com/*"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.liepin.com/*", "https://liepin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.zhaopin.com/*", "https://zhaopin.com/*"],
+      "js": ["zhilian-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

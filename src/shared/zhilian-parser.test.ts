@@ -1,0 +1,163 @@
+// @vitest-environment jsdom
+import { describe, expect, it } from "vitest";
+import {
+  detectZhilianLoginState,
+  detectZhilianAppliedPageOutcome,
+  detectZhilianOutcomeFromText,
+  extractZhilianJobId,
+  isZhilianDetailBoundToJob,
+  parseZhilianJobs,
+} from "./zhilian-parser";
+
+describe("detectZhilianLoginState", () => {
+  it("识别真实智联账号头像和账号菜单", () => {
+    document.body.innerHTML = `
+      <header id="right_nav_header" class="home-header">
+        <div class="home-header__c-login">
+          <div class="c-login__top">测试用户<span class="c-login__top__photo"><img class="c-login__top__img" alt="avatar"></span></div>
+          <div>个人中心 我的简历 退出</div>
+          <a>登录</a>
+        </div>
+      </header>`;
+
+    expect(detectZhilianLoginState(document)).toBe(true);
+  });
+
+  it("只在顶部存在明确登录入口且无账号强证据时返回未登录", () => {
+    document.body.innerHTML = `<header class="home-header"><a>登录/注册</a></header>`;
+    expect(detectZhilianLoginState(document)).toBe(false);
+  });
+
+  it("无法取得可靠证据时返回未知", () => {
+    document.body.innerHTML = `<main><a>登录</a></main>`;
+    expect(detectZhilianLoginState(document)).toBe(null);
+  });
+});
+
+describe("parseZhilianJobs", () => {
+  it("解析原版智联卡片结构并生成稳定键", () => {
+    document.body.innerHTML = `
+      <div class="joblist-box__item">
+        <a class="jobinfo__name" href="/jobdetail/CC123.htm">AI Agent 工程师</a>
+        <p class="jobinfo__salary">25-40K</p>
+        <div class="jobinfo__other-info-item"><span>杭州</span></div>
+        <div class="jobinfo__other-info-item">3-5年</div>
+        <div class="jobinfo__other-info-item">本科</div>
+        <div class="companyinfo__name">示例科技</div>
+        <button class="collect-and-apply__btn">立即投递</button>
+      </div>`;
+
+    const jobs = parseZhilianJobs(document);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      cardKey: "zhilian:CC123",
+      jobId: "CC123",
+      jobTitle: "AI Agent 工程师",
+      jobSalaryText: "25-40K",
+      jobArea: "杭州",
+      jobExpReq: "3-5年",
+      jobEduReq: "本科",
+      compName: "示例科技",
+      buttonText: "立即投递",
+    });
+  });
+
+  it("跳过缺少岗位名称的装饰卡片", () => {
+    document.body.innerHTML = `<div class="joblist-box__item"><button>立即投递</button></div>`;
+    expect(parseZhilianJobs(document)).toEqual([]);
+  });
+
+  it("解析新版左右分栏页面的岗位卡片", () => {
+    document.body.innerHTML = `
+      <div class="job-list-panel">
+        <div class="job-card job-card--active">
+          <div class="job-card__title-main">高级后端架构师</div>
+          <span class="job-card__salary">3-5万</span>
+          <div class="job-card__skill-tags">
+            <span class="job-card__skill-tag">本科</span>
+            <span class="job-card__skill-tag">5-10年</span>
+            <span class="job-card__skill-tag">Java</span>
+          </div>
+          <a class="job-card__company-name">辉瑞投资有限公司</a>
+          <div class="job-card__location">杭州 上城 小营</div>
+        </div>
+      </div>`;
+
+    const jobs = parseZhilianJobs(document);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      jobTitle: "高级后端架构师",
+      jobSalaryText: "3-5万",
+      jobArea: "杭州 上城 小营",
+      jobExpReq: "5-10年",
+      jobEduReq: "本科",
+      compName: "辉瑞投资有限公司",
+    });
+    expect(jobs[0].cardKey).toMatch(/^zhilian:/);
+  });
+});
+
+describe("isZhilianDetailBoundToJob", () => {
+  it("仅在新版详情标题和公司都匹配时通过", () => {
+    const [job] = (() => {
+      document.body.innerHTML = `
+        <div class="job-card">
+          <div class="job-card__title-main">AI Agent 工程师</div>
+          <div class="job-card__salary">25-40K</div>
+          <div class="job-card__company-name">示例科技</div>
+          <div class="job-card__location">杭州</div>
+        </div>`;
+      return parseZhilianJobs(document);
+    })();
+    document.body.innerHTML = `
+      <span class="job-detail-summary__title-text">AI Agent 工程师</span>
+      <span class="job-detail-summary__salary">25-40K</span>
+      <a class="job-detail-summary__company-name">示例科技</a>`;
+
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(true);
+    document.querySelector(".job-detail-summary__company-name")!.textContent = "其它公司";
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+    document.querySelector(".job-detail-summary__company-name")!.textContent = "示例科技";
+    document.querySelector(".job-detail-summary__salary")!.textContent = "15-20K";
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+  });
+});
+
+describe("detectZhilianOutcomeFromText", () => {
+  it("只把明确成功文案识别为成功", () => {
+    expect(detectZhilianOutcomeFromText("申请成功").outcome).toBe("success");
+    expect(detectZhilianOutcomeFromText("正在申请，请稍候").outcome).toBe("unknown");
+  });
+
+  it("区分验证、额度和简历失败", () => {
+    expect(detectZhilianOutcomeFromText("请完成滑块验证").outcome).toBe("blocked");
+    expect(detectZhilianOutcomeFromText("今日投递次数已达上限").outcome).toBe("blocked");
+    expect(detectZhilianOutcomeFromText("操作频繁，请稍后再试").outcome).toBe("blocked");
+    expect(detectZhilianOutcomeFromText("未设置默认简历").outcome).toBe("failed");
+  });
+});
+
+describe("detectZhilianAppliedPageOutcome", () => {
+  it("读取专用成功页正文中的明确投递结果", () => {
+    expect(detectZhilianAppliedPageOutcome(
+      "https://www.zhaopin.com/job-applied?number=ABC",
+      "恭喜您，投递成功！ 相似职位推荐",
+    ).outcome).toBe("success");
+  });
+
+  it("普通岗位列表页不会用全页文字判定成功", () => {
+    expect(detectZhilianAppliedPageOutcome(
+      "https://www.zhaopin.com/recommend",
+      "某个介绍区域提到投递成功",
+    ).outcome).toBe("unknown");
+  });
+});
+
+describe("extractZhilianJobId", () => {
+  it("兼容详情路径和查询参数", () => {
+    expect(extractZhilianJobId("https://www.zhaopin.com/jobdetail/ABC.htm")).toBe("ABC");
+    expect(extractZhilianJobId("https://sou.zhaopin.com/?jobId=XYZ")).toBe("XYZ");
+  });
+});
