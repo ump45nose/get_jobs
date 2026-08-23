@@ -7,14 +7,12 @@ import {
   randomBatchDelayMilliseconds,
 } from "../shared/defaults";
 import { getLiepinSafetyStatus } from "../shared/liepin-safety";
+import { getActiveTab, sendBackground, sendContent } from "./platform-runtime";
 import type {
   AppState,
   AiDiagnosticLog,
-  BackgroundRequest,
-  ContentRequest,
   DeliveryAttempt,
   DeliveryResult,
-  ExtensionResponse,
   GreetingDraft,
   LiepinBatchConfig,
   LiepinConfig,
@@ -62,44 +60,6 @@ const EMPTY_CONTEXT: LiepinPageContext = {
 
 /** 尚未从后台加载时展示的本机账号安全状态。 */
 const EMPTY_SAFETY = getLiepinSafetyStatus(undefined, DEFAULT_LIEPIN_CONFIG.batch);
-
-/**
- * 向 Service Worker 发送带类型的业务消息。
- *
- * @param request 后台消息。
- * @returns 后台响应数据。
- */
-async function sendBackground<T>(request: BackgroundRequest): Promise<T> {
-  const response = (await chrome.runtime.sendMessage(request)) as ExtensionResponse<T>;
-  if (!response.ok) throw new Error(response.error || "后台操作失败");
-  return response.data as T;
-}
-
-/**
- * 获取当前窗口的活动标签页。
- *
- * @returns 找不到活动标签页时抛出错误。
- */
-async function getActiveTab(): Promise<chrome.tabs.Tab> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) throw new Error("无法获取当前标签页");
-  return tab;
-}
-
-/**
- * 向当前猎聘标签页的 Content Script 发送消息。
- *
- * @param request 页面消息。
- * @param tabId 可选的固定目标标签页；投递任务必须传入。
- * @returns 页面响应数据。
- */
-async function sendContent<T>(request: ContentRequest, tabId?: number): Promise<T> {
-  const targetTabId = tabId ?? (await getActiveTab()).id;
-  if (!targetTabId) throw new Error("无法识别目标猎聘标签页");
-  const response = (await chrome.tabs.sendMessage(targetTabId, request)) as ExtensionResponse<T>;
-  if (!response.ok) throw new Error(response.error || "猎聘页面操作失败");
-  return response.data as T;
-}
 
 /**
  * 把 AI Base URL 转换为 Chrome 可选主机权限模式。

@@ -42,9 +42,11 @@ export default function EnvConfig() {
 
       if (result.success && result.data) {
         setEnvConfig({
-          hookUrl: result.data.HOOK_URL || '',
+          // 后端不返回既有 Webhook；空值代表未修改，避免读取或意外覆盖已保存的密钥型地址。
+          hookUrl: '',
           baseUrl: result.data.BASE_URL || '',
-          apiKey: result.data.API_KEY || '',
+          // 后端不返回既有密钥；空值代表未修改，避免读取或意外覆盖已保存的 API Key。
+          apiKey: '',
           model: result.data.MODEL || '',
           botIsSend: (() => {
             const raw = result.data.BOT_IS_SEND
@@ -69,12 +71,17 @@ export default function EnvConfig() {
     try {
       setSaving(true)
 
-      const configMap = {
-        HOOK_URL: envConfig.hookUrl,
+      const configMap: Record<string, string> = {
         BASE_URL: envConfig.baseUrl,
-        API_KEY: envConfig.apiKey,
         MODEL: envConfig.model,
         BOT_IS_SEND: String(envConfig.botIsSend ?? 0),
+      }
+      // 用户实际输入新值时才发送密钥，保留数据库中已有的密钥。
+      if (envConfig.apiKey.trim()) {
+        configMap.API_KEY = envConfig.apiKey.trim()
+      }
+      if (envConfig.hookUrl.trim()) {
+        configMap.HOOK_URL = envConfig.hookUrl.trim()
       }
 
       const response = await fetch('http://localhost:8888/api/config', {

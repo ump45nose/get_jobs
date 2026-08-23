@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -33,18 +34,32 @@ public class LiepinJobService implements JobPlatformService {
     private final ObjectProvider<Liepin> liepinProvider;
 
     // 运行状态标志
-    private volatile boolean isRunning = false;
+    /** 原子任务闸门，保证并发请求只能启动一个平台投递流程。 */
+    private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
     // 停止请求标志
     private volatile boolean shouldStop = false;
 
     @Override
     public void executeDelivery(Consumer<JobProgressMessage> progressCallback) {
-        if (isRunning) {
+        if (!reserveDelivery()) {
             progressCallback.accept(JobProgressMessage.warning(PLATFORM, "任务已在运行中"));
             return;
         }
+        executeReservedDelivery(progressCallback);
+    }
 
+    /**
+     * 在 HTTP 返回“已启动”前原子预占本平台任务，避免排队任务重复启动。
+     *
+     * @return 成功预占时返回 true。
+     */
+    public boolean reserveDelivery() {
+        return isRunning.compareAndSet(false, true);
+    }
+
+    /** 执行已预占的猎聘投递任务，并在 finally 中释放任务闸门。 */
+    public void executeReservedDelivery(Consumer<JobProgressMessage> progressCallback) {
         try {
             Page page = playwrightManager.getLiepinPage();
             if (page == null) {
@@ -57,7 +72,6 @@ public class LiepinJobService implements JobPlatformService {
                 return;
             }
 
-            isRunning = true;
             shouldStop = false;
 
             // 暂停后台登录监控，避免并发访问冲突
@@ -92,7 +106,7 @@ public class LiepinJobService implements JobPlatformService {
             log.error("猎聘投递任务执行失败", e);
             progressCallback.accept(JobProgressMessage.error(PLATFORM, "投递失败: " + e.getMessage()));
         } finally {
-            isRunning = false;
+            isRunning.set(false);
             shouldStop = false;
             try {
                 playwrightManager.resumeLiepinMonitoring();
@@ -102,7 +116,7 @@ public class LiepinJobService implements JobPlatformService {
 
     @Override
     public void stopDelivery() {
-        if (!isRunning) {
+        if (!isRunning.get()) {
             log.warn("猎聘任务未在运行，无需停止");
             return;
         }
@@ -117,7 +131,7 @@ public class LiepinJobService implements JobPlatformService {
     public Map<String, Object> getStatus() {
         Map<String, Object> status = new HashMap<>();
         status.put("platform", PLATFORM);
-        status.put("isRunning", isRunning);
+        status.put("isRunning", isRunning.get());
         status.put("isLoggedIn", playwrightManager.isLoggedIn(PLATFORM));
         return status;
     }
@@ -129,7 +143,7 @@ public class LiepinJobService implements JobPlatformService {
 
     @Override
     public boolean isRunning() {
-        return isRunning;
+        return isRunning.get();
     }
 
     public boolean shouldStop() {

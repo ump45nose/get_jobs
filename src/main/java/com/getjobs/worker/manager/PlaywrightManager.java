@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
@@ -105,6 +104,8 @@ public class PlaywrightManager {
     private volatile long last51CookieLogMs = 0L;
     private volatile int last51CookieLogCount = -1;
     private volatile String last51CookieRemark = "";
+    /** 容器关闭后拒绝再次初始化，避免任务与资源销毁交错。 */
+    private volatile boolean shuttingDown = false;
 
     @Autowired
     private CookieService cookieService;
@@ -112,7 +113,10 @@ public class PlaywrightManager {
     /**
      * 初始化Playwright实例（延迟初始化）
      */
-    public void init() {
+    public synchronized void init() {
+        if (shuttingDown) {
+            throw new IllegalStateException("Playwright 管理器正在关闭，拒绝初始化");
+        }
         if (isInitialized()) {
             return;
         }
@@ -164,19 +168,17 @@ public class PlaywrightManager {
             zhilianPage.setDefaultTimeout(DEFAULT_TIMEOUT);
             log.info("✓ 智联招聘 Page已创建");
 
-            // 并发执行已启用平台的初始化逻辑（导航、Cookie加载等）。
-            log.info("开始并发初始化非 BOSS 平台...");
-            CompletableFuture<Void> liepinFuture = CompletableFuture.runAsync(this::setupLiepinPlatform);
-            CompletableFuture<Void> job51Future = CompletableFuture.runAsync(this::setup51jobPlatform);
-            CompletableFuture<Void> zhilianFuture = CompletableFuture.runAsync(this::setupZhilianPlatform);
+            // BrowserContext 与 Page 由同一 Playwright 会话持有，必须顺序导航和加载 Cookie，避免并发访问竞态。
+            log.info("开始顺序初始化非 BOSS 平台...");
+            setupLiepinPlatform();
+            setup51jobPlatform();
+            setupZhilianPlatform();
 
-            // 等待所有平台初始化完成
-            CompletableFuture.allOf(liepinFuture, job51Future, zhilianFuture).join();
-
-            log.info("✓ 浏览器自动化引擎初始化完成（BOSS 已关闭，其它平台已并发启动）");
+            log.info("✓ 浏览器自动化引擎初始化完成（BOSS 已关闭，其它平台已顺序启动）");
             log.info("========================================");
         } catch (Exception e) {
             log.error("✗ 浏览器自动化引擎初始化失败", e);
+            closeResources();
             throw new RuntimeException("Playwright初始化失败", e);
         }
     }
@@ -1479,9 +1481,17 @@ public class PlaywrightManager {
      * 在Spring容器销毁前自动执行
      */
     @PreDestroy
-    public void destroy() {
+    public synchronized void destroy() {
         log.info("开始关闭Playwright管理器...");
+        shuttingDown = true;
+        closeResources();
+        log.info("Playwright管理器关闭完成！");
+    }
 
+    /**
+     * 按 Page、Context、Browser、Playwright 的依赖顺序释放资源，并清空引用防止误复用。
+     */
+    private void closeResources() {
         try {
             // 关闭所有页面
             if (bossPage != null) {
@@ -1516,8 +1526,13 @@ public class PlaywrightManager {
                 playwright.close();
                 log.info("Playwright实例已关闭");
             }
-
-            log.info("Playwright管理器关闭完成！");
+            bossPage = null;
+            liepinPage = null;
+            job51Page = null;
+            zhilianPage = null;
+            context = null;
+            browser = null;
+            playwright = null;
         } catch (Exception e) {
             log.error("关闭Playwright管理器时发生错误", e);
         }

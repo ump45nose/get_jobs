@@ -10,6 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.catalina.connector.ClientAbortException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
@@ -21,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executor;
 
 /**
  * Boss 平台控制器（单平台合并版）：进度 SSE 与任务接口
@@ -28,7 +31,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Slf4j
 @RestController
 @RequestMapping("/api/boss")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class BossController {
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -36,6 +38,11 @@ public class BossController {
     private final BossJobService bossJobService;
     private final PlaywrightManager playwrightManager;
     private final CookieService cookieService;
+
+    /** 平台自动化任务使用受 Spring 管理的执行器，避免占用 ForkJoin 公共线程池。 */
+    @Autowired
+    @Qualifier("taskExecutor")
+    private Executor taskExecutor;
 
     private final List<SseEmitter> bossProgressEmitters = new CopyOnWriteArrayList<>();
 
@@ -77,14 +84,14 @@ public class BossController {
             ));
         }
 
-        if (bossJobService.isRunning()) {
+        if (!bossJobService.reserveDelivery()) {
             return ResponseEntity.ok(Map.of(
                     "status", "already_running",
                     "message", "Boss投递任务已在运行中"
             ));
         }
 
-        CompletableFuture.runAsync(() -> bossJobService.executeDelivery(this::sendBossProgress));
+        CompletableFuture.runAsync(() -> bossJobService.executeReservedDelivery(this::sendBossProgress), taskExecutor);
 
         return ResponseEntity.ok(Map.of(
                 "status", "started",
@@ -111,16 +118,16 @@ public class BossController {
                 response.put("status", "not_logged_in");
                 return ResponseEntity.badRequest().body(response);
             }
-            if (bossJobService.isRunning()) {
+            if (!bossJobService.reserveDelivery()) {
                 response.put("success", false);
                 response.put("message", "Boss任务已在运行中，请等待当前任务完成");
                 response.put("status", "running");
                 return ResponseEntity.badRequest().body(response);
             }
-            CompletableFuture.runAsync(() -> bossJobService.executeDelivery(pm -> {
+            CompletableFuture.runAsync(() -> bossJobService.executeReservedDelivery(pm -> {
                 sendBossProgress(pm);
                 log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
-            }));
+            }), taskExecutor);
             response.put("success", true);
             response.put("message", "Boss任务启动成功");
             response.put("status", "started");

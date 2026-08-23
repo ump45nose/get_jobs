@@ -8,6 +8,7 @@ import com.getjobs.worker.manager.PlaywrightManager;
 import com.getjobs.worker.service.ZhilianJobService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
@@ -24,7 +26,6 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestController
 @RequestMapping("/api/zhilian")
-@CrossOrigin(origins = "*")
 public class ZhilianController {
 
     @Autowired
@@ -38,6 +39,11 @@ public class ZhilianController {
 
     @Autowired
     private ZhilianJobService zhilianJobService;
+
+    /** 平台自动化任务使用受 Spring 管理的执行器，避免占用 ForkJoin 公共线程池。 */
+    @Autowired
+    @Qualifier("taskExecutor")
+    private Executor taskExecutor;
 
     // ==================== 配置管理相关接口 ====================
 
@@ -177,13 +183,13 @@ public class ZhilianController {
             if (cookie != null) {
                 data.put("id", cookie.getId());
                 data.put("platform", cookie.getPlatform());
-                data.put("cookie_value", cookie.getCookieValue());
+                data.put("cookie_configured", cookie.getCookieValue() != null && !cookie.getCookieValue().isBlank());
                 data.put("remark", cookie.getRemark());
                 data.put("created_at", cookie.getCreatedAt());
                 data.put("updated_at", cookie.getUpdatedAt());
             } else {
                 data.put("platform", "zhilian");
-                data.put("cookie_value", null);
+                data.put("cookie_configured", false);
                 data.put("message", "未找到智联招聘Cookie记录");
             }
             response.put("success", true);
@@ -280,7 +286,7 @@ public class ZhilianController {
             }
 
             // 检查是否已有任务在运行
-            if (zhilianJobService.isRunning()) {
+            if (!zhilianJobService.reserveDelivery()) {
                 response.put("success", false);
                 response.put("message", "智联招聘任务已在运行中，请等待当前任务完成");
                 response.put("status", "running");
@@ -289,10 +295,10 @@ public class ZhilianController {
 
             // 异步启动新任务
             CompletableFuture.runAsync(() -> {
-                zhilianJobService.executeDelivery(progressMessage -> {
+                zhilianJobService.executeReservedDelivery(progressMessage -> {
                     log.info("[{}] {}", progressMessage.getPlatform(), progressMessage.getMessage());
                 });
-            });
+            }, taskExecutor);
 
             response.put("success", true);
             response.put("message", "智联招聘任务启动成功");

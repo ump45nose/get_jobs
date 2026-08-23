@@ -19,7 +19,6 @@ import java.util.*;
 @Slf4j
 @RestController
 @RequestMapping("/api/cookie")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class CookieController {
 
@@ -44,13 +43,14 @@ public class CookieController {
             if (cookie != null) {
                 data.put("id", cookie.getId());
                 data.put("platform", cookie.getPlatform());
-                data.put("cookie_value", cookie.getCookieValue());
+                // Cookie 仅保存在本机数据库并注入受管浏览器，API 不再回传可复用会话凭据。
+                data.put("cookie_configured", cookie.getCookieValue() != null && !cookie.getCookieValue().isBlank());
                 data.put("remark", cookie.getRemark());
                 data.put("created_at", cookie.getCreatedAt());
                 data.put("updated_at", cookie.getUpdatedAt());
             } else {
                 data.put("platform", platform);
-                data.put("cookie_value", null);
+                data.put("cookie_configured", false);
                 data.put("message", "未找到Cookie记录");
             }
             response.put("success", true);

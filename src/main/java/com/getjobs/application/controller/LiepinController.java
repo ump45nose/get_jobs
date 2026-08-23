@@ -10,12 +10,14 @@ import com.getjobs.worker.service.LiepinJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * 猎聘控制器
@@ -23,7 +25,6 @@ import java.util.concurrent.CompletableFuture;
  */
 @RestController
 @RequestMapping("/api/liepin")
-@CrossOrigin(origins = "*")
 public class LiepinController {
 
     private static final Logger log = LoggerFactory.getLogger(LiepinController.class);
@@ -39,6 +40,11 @@ public class LiepinController {
 
     @Autowired
     private LiepinService liepinService;
+
+    /** 平台自动化任务使用受 Spring 管理的执行器，避免占用 ForkJoin 公共线程池。 */
+    @Autowired
+    @Qualifier("taskExecutor")
+    private Executor taskExecutor;
 
     /**
      * 检查登录状态
@@ -81,7 +87,7 @@ public class LiepinController {
             }
 
             // 检查是否已有任务在运行
-            if (liepinJobService.isRunning()) {
+            if (!liepinJobService.reserveDelivery()) {
                 response.put("success", false);
                 response.put("message", "猎聘任务已在运行中，请等待当前任务完成");
                 response.put("status", "running");
@@ -90,10 +96,10 @@ public class LiepinController {
 
             // 异步启动新任务
             CompletableFuture.runAsync(() -> {
-                liepinJobService.executeDelivery(progressMessage -> {
+                liepinJobService.executeReservedDelivery(progressMessage -> {
                     log.info("[{}] {}", progressMessage.getPlatform(), progressMessage.getMessage());
                 });
-            });
+            }, taskExecutor);
 
             response.put("success", true);
             response.put("message", "猎聘任务启动成功");
@@ -273,13 +279,13 @@ public class LiepinController {
             if (cookie != null) {
                 data.put("id", cookie.getId());
                 data.put("platform", cookie.getPlatform());
-                data.put("cookie_value", cookie.getCookieValue());
+                data.put("cookie_configured", cookie.getCookieValue() != null && !cookie.getCookieValue().isBlank());
                 data.put("remark", cookie.getRemark());
                 data.put("created_at", cookie.getCreatedAt());
                 data.put("updated_at", cookie.getUpdatedAt());
             } else {
                 data.put("platform", "liepin");
-                data.put("cookie_value", null);
+                data.put("cookie_configured", false);
                 data.put("message", "未找到猎聘Cookie记录");
             }
             response.put("success", true);

@@ -26,19 +26,19 @@ public class AsyncConfig implements AsyncConfigurer {
     public Executor getAsyncExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         
-        // 核心线程数
-        executor.setCorePoolSize(2);
-        // 最大线程数
-        executor.setMaxPoolSize(5);
-        // 队列容量
-        executor.setQueueCapacity(100);
+        // 所有平台共享同一个 BrowserContext，自动化动作必须全局串行，不能并发访问 Playwright 对象。
+        executor.setCorePoolSize(1);
+        // 保持单线程，平台任务在队列中顺序执行。
+        executor.setMaxPoolSize(1);
+        // 队列容量限制待执行任务，避免无限堆积。
+        executor.setQueueCapacity(20);
         // 线程名前缀
-        executor.setThreadNamePrefix("Boss-Task-");
+        executor.setThreadNamePrefix("GetJobs-Task-");
         // 线程空闲时间（秒）
         executor.setKeepAliveSeconds(60);
         
-        // 拒绝策略：由调用线程处理该任务
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        // 队列满时显式拒绝，避免 HTTP 请求线程直接操作浏览器。
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         
         // 等待所有任务结束后再关闭线程池
         executor.setWaitForTasksToCompleteOnShutdown(true);

@@ -106,7 +106,8 @@ export interface ZhilianDeliveryResult {
 
 /** 持久化的智联申请尝试。 */
 export interface ZhilianDeliveryAttempt extends ZhilianDeliveryResult {
-  id?: number;
+  /** IndexedDB 使用平台与任务号组成的稳定键，重复回执会覆盖而不会重复计数。 */
+  id?: number | string;
   taskId: string;
   platform: "zhilian";
   createdAt: string;
@@ -155,11 +156,14 @@ export interface DeliveryResult {
   steps?: DeliverySteps;
   /** 页面动作与平台回执的脱敏时间线，便于分析“需处理”原因。 */
   logs?: DeliveryLogEntry[];
+  /** 页面动作已完成但本地审计回写失败时为 true，用户必须先核对平台记录而非立即重试。 */
+  recordingFailed?: boolean;
 }
 
 /** 持久化的投递尝试记录。 */
 export interface DeliveryAttempt extends DeliveryResult {
-  id?: number;
+  /** IndexedDB 使用平台与任务号组成的稳定键，重复回执会覆盖而不会重复计数。 */
+  id?: number | string;
   taskId: string;
   platform: "liepin";
   createdAt: string;

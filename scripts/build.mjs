@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 
@@ -44,6 +44,33 @@ async function buildExtension() {
   });
 
   await copyFile("manifest.json", "dist/manifest.json");
+  await verifyExtensionOutput();
+}
+
+/**
+ * 校验最终产物与 Manifest 的关键入口保持一致，避免构建成功但 Chrome 加载时缺少脚本。
+ *
+ * @returns {Promise<void>} 所有关键产物存在且版本一致时完成。
+ */
+async function verifyExtensionOutput() {
+  const [manifestText, packageText] = await Promise.all([
+    readFile("dist/manifest.json", "utf8"),
+    readFile("package.json", "utf8"),
+  ]);
+  const manifest = JSON.parse(manifestText);
+  const packageJson = JSON.parse(packageText);
+  const requiredFiles = [
+    "dist/sidepanel.html",
+    `dist/${manifest.background?.service_worker ?? ""}`,
+    ...((manifest.content_scripts ?? []).flatMap((entry) => entry.js ?? []).map((file) => `dist/${file}`)),
+  ];
+  if (manifest.version !== packageJson.version) {
+    throw new Error(`Manifest 版本 ${manifest.version} 与 package.json 版本 ${packageJson.version} 不一致`);
+  }
+  await Promise.all(requiredFiles.map(async (file) => {
+    if (file === "dist/") throw new Error("Manifest 未声明 Service Worker 入口");
+    await access(file);
+  }));
 }
 
 await buildExtension();

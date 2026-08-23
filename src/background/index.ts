@@ -287,6 +287,43 @@ function isZhilianUrl(url: string | undefined): boolean {
   }
 }
 
+/** 判断标签页是否属于猎聘招聘域名。 */
+function isLiepinUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return /(^|\.)liepin\.com$/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 校验助手请求指向的真实标签页和平台域名，不能信任消息体自带的 tabId。
+ *
+ * @param tabId 请求声称的目标标签页。
+ * @param platform 预期平台。
+ * @returns 验证后的标签页，失败时抛出明确错误。
+ */
+async function requirePlatformTab(tabId: number, platform: "liepin" | "zhilian"): Promise<chrome.tabs.Tab> {
+  const tab = await chrome.tabs.get(tabId);
+  const matches = platform === "liepin" ? isLiepinUrl(tab.url) : isZhilianUrl(tab.url);
+  if (!matches) throw new Error(`目标标签页不是${platform === "liepin" ? "猎聘" : "智联招聘"}页面`);
+  return tab;
+}
+
+/**
+ * 校验 Content Script 的来源与当前任务绑定标签页一致；智联 sidepanel 是受扩展保护的
+ * web-accessible 页面，Chrome 不保证为它提供 sender.tab，因此仅允许本扩展的固定入口作为例外。
+ *
+ * @param task 当前持久化任务。
+ * @param sender Chrome 提供的消息发送方。
+ * @returns 来源可信时返回 true。
+ */
+function isBoundTaskSender(task: TaskState | ZhilianTaskState, sender: chrome.runtime.MessageSender): boolean {
+  if (task.tabId !== undefined && sender.tab?.id === task.tabId) return true;
+  return sender.id === chrome.runtime.id && Boolean(sender.url?.startsWith(chrome.runtime.getURL("sidepanel.html")));
+}
+
 /** 查询本次新开的唯一智联标签页，并让其继续等待明确申请回执。 */
 async function continueZhilianExternalApplication(
   sender: chrome.runtime.MessageSender,
@@ -472,6 +509,7 @@ async function handleRequest(
       return { ok: true, data: draft };
     }
     case "START_LIEPIN_TASK": {
+      await requirePlatformTab(request.tabId, "liepin");
       return withTaskMutation(async () => {
         const current = await getTask();
         if (current.status === "running" || current.status === "stopping") {
@@ -540,22 +578,23 @@ async function handleRequest(
       });
     }
     case "RECORD_LIEPIN_ATTEMPT": {
-      const attempt: DeliveryAttempt = {
-        ...request.result,
-        taskId: request.taskId,
-        platform: "liepin",
-        createdAt: new Date().toISOString(),
-      };
-      await saveDeliveryAttempt(attempt);
       return withTaskMutation(async () => {
         const current = await getTask();
-        // 迟到结果保留到历史记录，但绝不能覆盖另一个正在运行的任务。
+        // 结果只能由本任务绑定的 Content Script 回写，禁止旧页或其他标签页推进状态。
         if (
           current.taskId !== request.taskId ||
+          !isBoundTaskSender(current, sender) ||
           (current.status !== "running" && current.status !== "stopping")
         ) {
           return { ok: true, data: current };
         }
+        const attempt: DeliveryAttempt = {
+          ...request.result,
+          taskId: request.taskId,
+          platform: "liepin",
+          createdAt: new Date().toISOString(),
+        };
+        await saveDeliveryAttempt(attempt);
         if (attempt.outcome === "delivered") {
           // 只有当前活动任务的首次明确成功回执才增加额度，迟到或重复消息不会重复计数。
           await recordSuccessfulDelivery(await getConfig());
@@ -586,6 +625,7 @@ async function handleRequest(
       });
     }
     case "START_ZHILIAN_TASK": {
+      await requirePlatformTab(request.tabId, "zhilian");
       return withTaskMutation(async () => {
         const current = await getZhilianTask();
         if (current.status === "running" || current.status === "stopping") {
@@ -649,18 +689,22 @@ async function handleRequest(
       });
     }
     case "RECORD_ZHILIAN_ATTEMPT": {
-      const attempt: ZhilianDeliveryAttempt = {
-        ...request.result,
-        taskId: request.taskId,
-        platform: "zhilian",
-        createdAt: new Date().toISOString(),
-      };
-      await saveZhilianDeliveryAttempt(attempt);
       return withTaskMutation(async () => {
         const current = await getZhilianTask();
-        if (current.taskId !== request.taskId || current.status !== "running") {
+        if (
+          current.taskId !== request.taskId ||
+          !isBoundTaskSender(current, sender) ||
+          current.status !== "running"
+        ) {
           return { ok: true, data: current };
         }
+        const attempt: ZhilianDeliveryAttempt = {
+          ...request.result,
+          taskId: request.taskId,
+          platform: "zhilian",
+          createdAt: new Date().toISOString(),
+        };
+        await saveZhilianDeliveryAttempt(attempt);
         if (attempt.outcome === "delivered") {
           await recordSuccessfulZhilianDelivery(await getZhilianConfig());
         }
@@ -674,6 +718,14 @@ async function handleRequest(
       });
     }
     case "CONTINUE_ZHILIAN_EXTERNAL_APPLICATION": {
+      const current = await getZhilianTask();
+      if (
+        current.taskId !== request.taskId ||
+        current.status !== "running" ||
+        !isBoundTaskSender(current, sender)
+      ) {
+        return { ok: false, error: "智联任务已结束或来源标签页不匹配" };
+      }
       return {
         ok: true,
         data: await continueZhilianExternalApplication(
@@ -686,6 +738,10 @@ async function handleRequest(
       };
     }
     case "CLOSE_ZHILIAN_EXTERNAL_SUCCESS_TAB": {
+      const current = await getZhilianTask();
+      if (current.status !== "running" || !isBoundTaskSender(current, sender)) {
+        return { ok: false, error: "智联任务已结束或来源标签页不匹配" };
+      }
       await closeZhilianExternalSuccessTab(sender, request.tabId, request.knownTabIds, request.jobId);
       return { ok: true, data: { closed: true } };
     }

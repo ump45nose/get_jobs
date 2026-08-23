@@ -33,7 +33,11 @@ async function savePlatformDeliveryAttempt(attempt: AnyDeliveryAttempt): Promise
       updatedAt: attempt.createdAt,
     } satisfies AnyJobSnapshot & { key: string; lastOutcome: string; updatedAt: string };
     transaction.objectStore(JOB_STORE).put(storedJob);
-    transaction.objectStore(ATTEMPT_STORE).add(attempt);
+    // 同一任务只允许一条审计记录；重复消息会覆盖该记录而不会重复消耗额度或膨胀历史。
+    transaction.objectStore(ATTEMPT_STORE).put({
+      ...attempt,
+      id: `${attempt.platform}:${attempt.taskId}`,
+    });
     await completed;
   } finally {
     database.close();

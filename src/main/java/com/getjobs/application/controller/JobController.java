@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.catalina.connector.ClientAbortException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
@@ -27,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
@@ -36,7 +39,6 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class JobController {
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -45,6 +47,10 @@ public class JobController {
     private final Job51Service job51Service;
     private final Job51JobService job51JobService;
     private final PlaywrightManager playwrightManager;
+    /** 平台自动化任务使用受 Spring 管理的执行器，避免占用 ForkJoin 公共线程池。 */
+    @Autowired
+    @Qualifier("taskExecutor")
+    private Executor taskExecutor;
     private final CookieService cookieService;
 
     // SSE emitter lists
@@ -344,13 +350,13 @@ public class JobController {
             if (cookie != null) {
                 data.put("id", cookie.getId());
                 data.put("platform", cookie.getPlatform());
-                data.put("cookie_value", cookie.getCookieValue());
+                data.put("cookie_configured", cookie.getCookieValue() != null && !cookie.getCookieValue().isBlank());
                 data.put("remark", cookie.getRemark());
                 data.put("created_at", cookie.getCreatedAt());
                 data.put("updated_at", cookie.getUpdatedAt());
             } else {
                 data.put("platform", "51job");
-                data.put("cookie_value", null);
+                data.put("cookie_configured", false);
                 data.put("message", "未找到51job Cookie记录");
             }
             response.put("success", true);
@@ -390,17 +396,17 @@ public class JobController {
                 response.put("status", "not_logged_in");
                 return ResponseEntity.badRequest().body(response);
             }
-            if (job51JobService.isRunning()) {
+            if (!job51JobService.reserveDelivery()) {
                 response.put("success", false);
                 response.put("message", "51job任务已在运行中，请等待当前任务完成");
                 response.put("status", "running");
                 return ResponseEntity.badRequest().body(response);
             }
-            CompletableFuture.runAsync(() -> job51JobService.executeDelivery(pm -> {
+            CompletableFuture.runAsync(() -> job51JobService.executeReservedDelivery(pm -> {
                 // 推送到 SSE 并保留日志输出
                 sendJob51Progress(pm);
                 log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
-            }));
+            }), taskExecutor);
             response.put("success", true);
             response.put("message", "51job任务启动成功");
             response.put("status", "started");

@@ -955,8 +955,20 @@ async function applySingleJob(
       ...result,
       logs: logs.length ? logs.slice() : undefined,
     };
-    await recordResult(taskId, persistedResult);
-    return persistedResult;
+    try {
+      await recordResult(taskId, persistedResult);
+      return persistedResult;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // 页面动作与审计写入解耦：动作已经有明确回执时，绝不能因本地记录失败诱导用户重复投递。
+      onLog("task", "record-failed", "本地审计记录失败，需人工核对平台记录", { error: message });
+      return {
+        ...persistedResult,
+        recordingFailed: true,
+        logs: logs.slice(),
+        message: `${persistedResult.message}；本地记录失败，请先核对平台沟通记录，勿立即重试`,
+      };
+    }
   };
 
   try {

@@ -5,10 +5,8 @@ import {
   randomBatchDelayMilliseconds,
 } from "../shared/defaults";
 import { getLiepinSafetyStatus } from "../shared/liepin-safety";
+import { getActiveTab, sendBackground, sendContent } from "./platform-runtime";
 import type {
-  BackgroundRequest,
-  ContentRequest,
-  ExtensionResponse,
   LiepinSafetyStatus,
   ZhilianAppState,
   ZhilianConfig,
@@ -36,27 +34,6 @@ interface ZhilianBatchProgress {
   message: string;
   currentJob?: string;
   remainingSeconds?: number;
-}
-
-/** 向后台发送智联业务消息并统一抛出错误。 */
-async function sendBackground<T>(request: BackgroundRequest): Promise<T> {
-  const response = await chrome.runtime.sendMessage(request) as ExtensionResponse<T>;
-  if (!response.ok) throw new Error(response.error || "智联后台操作失败");
-  return response.data as T;
-}
-
-/** 读取当前活动标签页，并确保动作仍绑定用户看到的智联页面。 */
-async function getActiveTab(): Promise<chrome.tabs.Tab> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id === undefined) throw new Error("无法识别当前智联标签页");
-  return tab;
-}
-
-/** 向指定智联标签页的 Content Script 发送页面操作。 */
-async function sendContent<T>(request: ContentRequest, tabId: number): Promise<T> {
-  const response = await chrome.tabs.sendMessage(tabId, request) as ExtensionResponse<T>;
-  if (!response.ok) throw new Error(response.error || "智联页面操作失败");
-  return response.data as T;
 }
 
 /** 判断 URL 是否属于智联招聘域名。 */
