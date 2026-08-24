@@ -38,6 +38,30 @@ function normalizeText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
+/** 规整可携带展示后缀的薪资文本，保留数值区间避免把不同薪资误判为相同。 */
+function normalizeSalaryText(value: string | null | undefined): string {
+  return normalizeText(value).toLowerCase().replace(/[\s·•]/g, "");
+}
+
+/** 判断详情节点及其祖先是否处于可见状态，排除 SPA 缓存的旧详情。 */
+function isVisibleElement(element: HTMLElement): boolean {
+  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+    if (current.hidden || current.getAttribute("aria-hidden") === "true") return false;
+    const style = current.ownerDocument.defaultView?.getComputedStyle(current);
+    if (style?.display === "none" || style?.visibility === "hidden") return false;
+  }
+  return true;
+}
+
+/** 比较详情薪资与列表薪资，允许详情附加月数等展示说明。 */
+function isCompatibleSalary(expected: string, actual: string): boolean {
+  const normalizedExpected = normalizeSalaryText(expected);
+  const normalizedActual = normalizeSalaryText(actual);
+  return normalizedExpected === normalizedActual
+    || normalizedActual.includes(normalizedExpected)
+    || normalizedExpected.includes(normalizedActual);
+}
+
 /**
  * 依据智联顶部账号区判断登录状态。
  *
@@ -173,7 +197,7 @@ export function parseZhilianJobs(root: ParentNode): ZhilianJobSnapshot[] {
  * @param job 待操作的岗位快照。
  * @returns 标题与已知公司都匹配时返回 true。
  */
-export function isZhilianDetailBoundToJob(root: ParentNode, job: ZhilianJobSnapshot): boolean {
+function isZhilianDetailContainerBoundToJob(root: ParentNode, job: ZhilianJobSnapshot): boolean {
   const detailTitle = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.title)?.textContent);
   if (!detailTitle || detailTitle !== normalizeText(job.jobTitle)) return false;
 
@@ -182,7 +206,65 @@ export function isZhilianDetailBoundToJob(root: ParentNode, job: ZhilianJobSnaps
 
   const detailSalary = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.salary)?.textContent);
   // 新版列表没有岗位 ID，因此已知薪资也必须一致，降低同公司同岗位名误绑定风险。
-  return !job.jobSalaryText || (Boolean(detailSalary) && detailSalary === normalizeText(job.jobSalaryText));
+  return !job.jobSalaryText || (Boolean(detailSalary) && isCompatibleSalary(job.jobSalaryText, detailSalary));
+}
+
+/**
+ * 找出当前可见的右侧详情容器，忽略 SPA 保留的隐藏旧节点。
+ *
+ * @param root 当前文档或测试容器。
+ * @returns 每个可见详情区各一个容器；无标准容器时按详情标题向上回溯到申请按钮。
+ */
+export function findZhilianVisibleDetailContainers(root: ParentNode): HTMLElement[] {
+  const directContainers = [
+    ...(root instanceof HTMLElement && root.matches(".job-detail-summary") ? [root] : []),
+    ...Array.from(root.querySelectorAll<HTMLElement>(".job-detail-summary")),
+  ].filter(isVisibleElement);
+  if (directContainers.length) return directContainers;
+
+  const containers = new Set<HTMLElement>();
+  for (const title of Array.from(root.querySelectorAll<HTMLElement>(ZHILIAN_DETAIL_SELECTORS.title))) {
+    if (!isVisibleElement(title)) continue;
+    let current = title.parentElement;
+    while (current) {
+      if (current.querySelector(ZHILIAN_DETAIL_SELECTORS.applyButton)) {
+        containers.add(current);
+        break;
+      }
+      if (current === root) break;
+      current = current.parentElement;
+    }
+    // 兼容无申请按钮的静态详情，用于只读绑定校验。
+    if (!current && title.parentElement) containers.add(title.parentElement);
+  }
+  return [...containers];
+}
+
+/**
+ * 在可见详情容器中确认唯一属于目标岗位的详情区。
+ *
+ * @param root 当前文档或详情容器。
+ * @param job 待操作的岗位快照。
+ * @returns 唯一匹配的详情容器；无匹配或存在歧义时返回 null。
+ */
+export function findZhilianDetailContainerBoundToJob(
+  root: ParentNode,
+  job: ZhilianJobSnapshot,
+): HTMLElement | null {
+  const matches = findZhilianVisibleDetailContainers(root)
+    .filter((container) => isZhilianDetailContainerBoundToJob(container, job));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
+ * 判断当前可见详情是否已经唯一绑定指定岗位。
+ *
+ * @param root 当前文档或详情容器。
+ * @param job 待操作的岗位快照。
+ * @returns 存在唯一匹配详情时返回 true。
+ */
+export function isZhilianDetailBoundToJob(root: ParentNode, job: ZhilianJobSnapshot): boolean {
+  return Boolean(findZhilianDetailContainerBoundToJob(root, job));
 }
 
 /** 解析单个已定位的智联岗位卡片，供动作前再次按稳定键核对。 */

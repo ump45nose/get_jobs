@@ -7,7 +7,7 @@ import {
   detectZhilianAppliedPageOutcome,
   detectZhilianOutcomeFromText,
   findZhilianJobCards,
-  isZhilianDetailBoundToJob,
+  findZhilianDetailContainerBoundToJob,
   isSameZhilianJob,
   parseZhilianJobCard,
   parseZhilianJobs,
@@ -127,8 +127,9 @@ function findApplyButton(card: Element): HTMLButtonElement | null {
  * @returns 详情标题和公司匹配时返回唯一申请按钮，否则返回 null。
  */
 function findBoundDetailApplyButton(job: ZhilianJobSnapshot): HTMLButtonElement | null {
-  if (!isZhilianDetailBoundToJob(document, job)) return null;
-  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(ZHILIAN_DETAIL_SELECTORS.applyButton));
+  const detailContainer = findZhilianDetailContainerBoundToJob(document, job);
+  if (!detailContainer) return null;
+  const buttons = Array.from(detailContainer.querySelectorAll<HTMLButtonElement>(ZHILIAN_DETAIL_SELECTORS.applyButton));
   if (buttons.length !== 1) return null;
   const text = (buttons[0].textContent ?? "").replace(/\s+/g, "").trim();
   return APPLY_TEXTS.has(text) || ALREADY_APPLIED_TEXTS.has(text) ? buttons[0] : null;

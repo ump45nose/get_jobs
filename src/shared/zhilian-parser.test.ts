@@ -5,6 +5,7 @@ import {
   detectZhilianAppliedPageOutcome,
   detectZhilianOutcomeFromText,
   extractZhilianJobId,
+  findZhilianDetailContainerBoundToJob,
   isSameZhilianJob,
   isZhilianDetailBoundToJob,
   parseZhilianJobs,
@@ -122,6 +123,60 @@ describe("isZhilianDetailBoundToJob", () => {
     expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
     document.querySelector(".job-detail-summary__company-name")!.textContent = "示例科技";
     document.querySelector(".job-detail-summary__salary")!.textContent = "15-20K";
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+  });
+
+  it("忽略 SPA 缓存的隐藏旧详情，绑定可见的第二个岗位详情", () => {
+    const [job] = (() => {
+      document.body.innerHTML = `
+        <div class="job-card">
+          <div class="job-card__title-main">第二个岗位</div>
+          <div class="job-card__salary">20-30K</div>
+          <div class="job-card__company-name">目标公司</div>
+          <div class="job-card__location">杭州</div>
+        </div>`;
+      return parseZhilianJobs(document);
+    })();
+    document.body.innerHTML = `
+      <section class="job-detail-summary" style="display: none">
+        <span class="job-detail-summary__title-text">第一个岗位</span>
+        <span class="job-detail-summary__salary">10-15K</span>
+        <a class="job-detail-summary__company-name">旧公司</a>
+        <button class="job-detail-summary__apply">立即投递</button>
+      </section>
+      <section class="job-detail-summary">
+        <span class="job-detail-summary__title-text">第二个岗位</span>
+        <span class="job-detail-summary__salary">20-30K · 13薪</span>
+        <a class="job-detail-summary__company-name">目标公司</a>
+        <button class="job-detail-summary__apply">立即投递</button>
+      </section>`;
+
+    const container = findZhilianDetailContainerBoundToJob(document, job);
+    expect(container?.querySelector(".job-detail-summary__title-text")?.textContent).toBe("第二个岗位");
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(true);
+  });
+
+  it("多个可见详情都能匹配时拒绝选择，避免误投岗位", () => {
+    const job = {
+      cardKey: "zhilian:same:0",
+      fingerprint: "same",
+      jobTitle: "后端工程师",
+      compName: "示例科技",
+      jobSalaryText: "20-30K",
+    };
+    document.body.innerHTML = `
+      <section class="job-detail-summary">
+        <span class="job-detail-summary__title-text">后端工程师</span>
+        <span class="job-detail-summary__salary">20-30K</span>
+        <a class="job-detail-summary__company-name">示例科技</a>
+      </section>
+      <section class="job-detail-summary">
+        <span class="job-detail-summary__title-text">后端工程师</span>
+        <span class="job-detail-summary__salary">20-30K</span>
+        <a class="job-detail-summary__company-name">示例科技</a>
+      </section>`;
+
+    expect(findZhilianDetailContainerBoundToJob(document, job)).toBeNull();
     expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
   });
 });
