@@ -307,7 +307,7 @@ export type ContentRequest =
       config: ZhilianConfig;
       ignoredOutcomeTexts?: string[];
     }
-  | { type: "APPLY_ZHILIAN_JOB"; taskId: string; cardKey: string; config: ZhilianConfig }
+  | { type: "APPLY_ZHILIAN_JOB"; taskId: string; job: ZhilianJobSnapshot; config: ZhilianConfig }
   | { type: "STOP_ZHILIAN_TASK"; taskId: string };
 
 /** 发送给 Service Worker 的消息。 */

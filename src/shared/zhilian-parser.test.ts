@@ -5,6 +5,7 @@ import {
   detectZhilianAppliedPageOutcome,
   detectZhilianOutcomeFromText,
   extractZhilianJobId,
+  isSameZhilianJob,
   isZhilianDetailBoundToJob,
   parseZhilianJobs,
 } from "./zhilian-parser";
@@ -122,6 +123,34 @@ describe("isZhilianDetailBoundToJob", () => {
     document.querySelector(".job-detail-summary__company-name")!.textContent = "示例科技";
     document.querySelector(".job-detail-summary__salary")!.textContent = "15-20K";
     expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+  });
+});
+
+describe("isSameZhilianJob", () => {
+  it("无岗位 ID 时忽略列表下标导致的 cardKey 变化，使用稳定指纹定位", () => {
+    const target = {
+      cardKey: "zhilian:backend-example:1",
+      fingerprint: "backend-example",
+      jobTitle: "后端工程师",
+    };
+    const reordered = {
+      ...target,
+      cardKey: "zhilian:backend-example:4",
+    };
+
+    expect(isSameZhilianJob(target, reordered)).toBe(true);
+  });
+
+  it("有岗位 ID 时必须匹配相同 ID，避免相同指纹误指向另一岗位", () => {
+    const target = {
+      cardKey: "zhilian:JOB-1",
+      fingerprint: "same-fields",
+      jobId: "JOB-1",
+      jobTitle: "后端工程师",
+    };
+    const anotherJob = { ...target, cardKey: "zhilian:JOB-2", jobId: "JOB-2" };
+
+    expect(isSameZhilianJob(target, anotherJob)).toBe(false);
   });
 });
 

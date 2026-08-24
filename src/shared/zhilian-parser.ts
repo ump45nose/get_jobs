@@ -196,6 +196,24 @@ export function parseZhilianJobCard(card: Element, index: number): ZhilianJobSna
   return job.jobId ? job : { ...job, cardKey: `zhilian:${job.fingerprint}:${index}` };
 }
 
+/**
+ * 判断重绘后的岗位快照是否仍指向同一个智联职位。
+ *
+ * 有岗位 ID 时优先使用 ID；新版列表页没有岗位 ID 时，使用由标题、公司、地区和薪资构成的
+ * 指纹，避免把会随列表重排变化的 cardKey 下标当成业务身份。
+ *
+ * @param target 批次开始时冻结的目标岗位。
+ * @param candidate 当前 DOM 重新解析出的候选岗位。
+ * @returns 两个快照可安全视为同一职位时返回 true。
+ */
+export function isSameZhilianJob(
+  target: ZhilianJobSnapshot,
+  candidate: ZhilianJobSnapshot,
+): boolean {
+  if (target.jobId && candidate.jobId) return target.jobId === candidate.jobId;
+  return target.fingerprint === candidate.fingerprint;
+}
+
 /** 从智联申请结果文本中识别明确状态；没有证据时必须返回 unknown。 */
 export function detectZhilianOutcomeFromText(text: string): ZhilianExternalOutcome {
   const normalized = normalizeText(text);

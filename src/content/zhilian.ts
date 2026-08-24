@@ -8,6 +8,7 @@ import {
   detectZhilianOutcomeFromText,
   findZhilianJobCards,
   isZhilianDetailBoundToJob,
+  isSameZhilianJob,
   parseZhilianJobCard,
   parseZhilianJobs,
 } from "../shared/zhilian-parser";
@@ -85,14 +86,23 @@ function inspectPage(): ZhilianPageContext {
   };
 }
 
-/** 按稳定 cardKey 重新定位岗位卡片，避免列表重排后误点相邻岗位。 */
-function findJobCard(cardKey: string): { card: Element; job: ZhilianJobSnapshot } | null {
+/**
+ * 按岗位业务身份重新定位卡片：优先精确 cardKey，列表重排后仅在稳定身份唯一时回退到指纹。
+ *
+ * @param target 批次开始时冻结的目标岗位。
+ * @returns 唯一匹配的当前 DOM 卡片；存在歧义时返回 null，绝不点击相邻岗位。
+ */
+function findJobCard(target: ZhilianJobSnapshot): { card: Element; job: ZhilianJobSnapshot } | null {
   const cards = findZhilianJobCards(document);
+  const fingerprintMatches: Array<{ card: Element; job: ZhilianJobSnapshot }> = [];
   for (let index = 0; index < cards.length; index += 1) {
     const job = parseZhilianJobCard(cards[index], index);
-    if (job?.cardKey === cardKey) return { card: cards[index], job };
+    if (!job) continue;
+    if (job.cardKey === target.cardKey) return { card: cards[index], job };
+    if (isSameZhilianJob(target, job)) fingerprintMatches.push({ card: cards[index], job });
   }
-  return null;
+  // 无岗位 ID 的 cardKey 包含页面下标。首个投递触发重绘后，只有唯一稳定指纹才允许继续。
+  return fingerprintMatches.length === 1 ? fingerprintMatches[0] : null;
 }
 
 /** 在岗位卡片内寻找语义明确的申请按钮。 */
@@ -157,7 +167,7 @@ async function prepareApplyButton(
   const deadline = Date.now() + Math.min(10_000, config.batch.resumeReceiptTimeoutSeconds * 1_000);
   while (Date.now() < deadline) {
     if (stopRequested) throw new Error("智联任务已停止");
-    const refreshed = findJobCard(target.job.cardKey);
+    const refreshed = findJobCard(target.job);
     const button = refreshed ? findApplyButtonForJob(refreshed) : null;
     if (button) return button;
     if (!(await wait(100))) throw new Error("智联任务已停止");
@@ -318,11 +328,11 @@ async function completeCurrentApplication(
 /** 执行一次智联申请并等待当前页或本次新标签页返回明确回执。 */
 async function applySingleJob(
   taskId: string,
-  cardKey: string,
+  requestedJob: ZhilianJobSnapshot,
   config: ZhilianConfig,
 ): Promise<ZhilianDeliveryResult> {
   if (activeTaskId) throw new Error("当前页面已有智联任务正在运行");
-  const target = findJobCard(cardKey);
+  const target = findJobCard(requestedJob);
   if (!target) throw new Error("岗位列表已变化，请重新识别后再投递");
 
   activeTaskId = taskId;
@@ -345,7 +355,7 @@ async function applySingleJob(
       return { outcome: "cancelled", message: "任务已在点击前停止", job: target.job };
     }
     // 等待期间站点可能重绘详情按钮，点击前必须再次绑定当前岗位并获取实时节点。
-    const refreshedBeforeClick = findJobCard(cardKey);
+    const refreshedBeforeClick = findJobCard(requestedJob);
     const liveButton = refreshedBeforeClick ? findApplyButtonForJob(refreshedBeforeClick) : null;
     if (!liveButton
       || !liveButton.isConnected
@@ -362,7 +372,7 @@ async function applySingleJob(
       const current = await advanceCurrentApplication(config, baselineOutcomeTexts);
       if (current.outcome !== "unknown") return buildResult(target.job, current);
 
-      const refreshed = findJobCard(cardKey);
+      const refreshed = findJobCard(requestedJob);
       const refreshedText = refreshed
         ? (findApplyButtonForJob(refreshed)?.textContent ?? "").replace(/\s+/g, "").trim()
         : "";
@@ -431,7 +441,7 @@ chrome.runtime.onMessage.addListener((request: ContentRequest, _sender, sendResp
     return false;
   }
   if (request.type === "APPLY_ZHILIAN_JOB") {
-    void applySingleJob(request.taskId, request.cardKey, request.config)
+    void applySingleJob(request.taskId, request.job, request.config)
       .then((data) => sendResponse({ ok: true, data } satisfies ExtensionResponse<ZhilianDeliveryResult>))
       .catch((error: unknown) => sendResponse({
         ok: false,

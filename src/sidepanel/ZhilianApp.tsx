@@ -143,7 +143,7 @@ export function ZhilianApp() {
     const result = await sendContent<ZhilianDeliveryResult>({
       type: "APPLY_ZHILIAN_JOB",
       taskId: started.taskId!,
-      cardKey: job.cardKey,
+      job,
       config: frozenConfig,
     }, tabId);
     const nextTask = await sendBackground<ZhilianTaskState>({
