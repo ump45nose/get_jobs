@@ -9,6 +9,7 @@ import {
   findZhilianJobCards,
   findZhilianDetailContainerBoundToJob,
   isSameZhilianJob,
+  isZhilianJobCardActive,
   parseZhilianJobCard,
   parseZhilianJobs,
 } from "../shared/zhilian-parser";
@@ -142,7 +143,10 @@ function findBoundDetailApplyButton(job: ZhilianJobSnapshot): HTMLButtonElement 
  * @returns 当前与岗位绑定的申请按钮。
  */
 function findApplyButtonForJob(target: { card: Element; job: ZhilianJobSnapshot }): HTMLButtonElement | null {
-  return findApplyButton(target.card) ?? findBoundDetailApplyButton(target.job);
+  const embeddedButton = findApplyButton(target.card);
+  if (embeddedButton) return embeddedButton;
+  // 右侧详情只可在左侧已确认选中目标卡片后使用，避免“客户公司”场景放宽公司比较时误投旧详情。
+  return isZhilianJobCardActive(target.card) ? findBoundDetailApplyButton(target.job) : null;
 }
 
 /**

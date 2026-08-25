@@ -8,6 +8,7 @@ import {
   findZhilianDetailContainerBoundToJob,
   isSameZhilianJob,
   isZhilianDetailBoundToJob,
+  isZhilianJobCardActive,
   parseZhilianJobs,
 } from "./zhilian-parser";
 
@@ -178,6 +179,40 @@ describe("isZhilianDetailBoundToJob", () => {
 
     expect(findZhilianDetailContainerBoundToJob(document, job)).toBeNull();
     expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+  });
+
+  it("详情明确为客户公司时，以标题和薪资确认外包职位详情", () => {
+    const job = {
+      cardKey: "zhilian:outsourcing:0",
+      fingerprint: "outsourcing",
+      jobTitle: "机器人上位机软件工程师",
+      compName: "苏州人瑞普惠人力资源服务有限公司",
+      jobSalaryText: "2-3万·13薪",
+    };
+    document.body.innerHTML = `
+      <section class="job-detail-summary">
+        <span class="job-detail-summary__title-text">机器人上位机软件工程师</span>
+        <span class="job-detail-summary__salary">2-3万·13薪</span>
+        <a class="job-detail-summary__company-name">客户公司：北京比利信息技术有限公司</a>
+      </section>`;
+
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(true);
+    document.querySelector(".job-detail-summary__salary")!.textContent = "1-2万";
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+  });
+});
+
+describe("isZhilianJobCardActive", () => {
+  it("只接受智联明确标记为当前详情来源的岗位卡片", () => {
+    document.body.innerHTML = `
+      <div class="job-card job-card--active"></div>
+      <div class="job-card" aria-selected="true"></div>
+      <div class="job-card"></div>`;
+    const cards = Array.from(document.querySelectorAll(".job-card"));
+
+    expect(isZhilianJobCardActive(cards[0])).toBe(true);
+    expect(isZhilianJobCardActive(cards[1])).toBe(true);
+    expect(isZhilianJobCardActive(cards[2])).toBe(false);
   });
 });
 

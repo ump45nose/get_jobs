@@ -62,6 +62,11 @@ function isCompatibleSalary(expected: string, actual: string): boolean {
     || normalizedExpected.includes(normalizedActual);
 }
 
+/** 判断详情公司字段是否明确表示用工方客户，而非左侧卡片中的招聘服务公司。 */
+function isClientCompanyText(value: string): boolean {
+  return /^客户公司\s*[:：]/.test(normalizeText(value));
+}
+
 /**
  * 依据智联顶部账号区判断登录状态。
  *
@@ -202,7 +207,11 @@ function isZhilianDetailContainerBoundToJob(root: ParentNode, job: ZhilianJobSna
   if (!detailTitle || detailTitle !== normalizeText(job.jobTitle)) return false;
 
   const detailCompany = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.company)?.textContent);
-  if (job.compName && (!detailCompany || detailCompany !== normalizeText(job.compName))) return false;
+  // 外包/猎头职位的左卡显示招聘服务公司，右侧则明确标出“客户公司：”。此时不能把两者当同一字段，
+  // 改由内容脚本额外确认目标卡片已激活，并继续使用标题和薪资这两个岗位字段完成绑定。
+  if (job.compName
+    && (!detailCompany
+      || (!isClientCompanyText(detailCompany) && detailCompany !== normalizeText(job.compName)))) return false;
 
   const detailSalary = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.salary)?.textContent);
   // 新版列表没有岗位 ID，因此已知薪资也必须一致，降低同公司同岗位名误绑定风险。
@@ -265,6 +274,16 @@ export function findZhilianDetailContainerBoundToJob(
  */
 export function isZhilianDetailBoundToJob(root: ParentNode, job: ZhilianJobSnapshot): boolean {
   return Boolean(findZhilianDetailContainerBoundToJob(root, job));
+}
+
+/**
+ * 判断左侧职位卡片是否已被当前智联页面选中。
+ *
+ * @param card 当前重新定位到的岗位卡片。
+ * @returns 页面将该卡片标记为当前详情来源时返回 true。
+ */
+export function isZhilianJobCardActive(card: Element): boolean {
+  return card.matches(".job-card--active, [aria-selected=\"true\"], [data-active=\"true\"]");
 }
 
 /** 解析单个已定位的智联岗位卡片，供动作前再次按稳定键核对。 */
