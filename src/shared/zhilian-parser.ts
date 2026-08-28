@@ -62,6 +62,23 @@ function isCompatibleSalary(expected: string, actual: string): boolean {
     || normalizedExpected.includes(normalizedActual);
 }
 
+/**
+ * 比较列表标题与详情标题，兼容智联卡片末尾省略号造成的可验证前缀截断。
+ *
+ * @param cardTitle 左侧卡片解析出的职位标题。
+ * @param detailTitle 右侧详情显示的完整职位标题。
+ * @returns 标题完全一致，或卡片以省略号截断且详情以前缀开头时返回 true。
+ */
+function isCompatibleJobTitle(cardTitle: string, detailTitle: string): boolean {
+  const expected = normalizeText(cardTitle);
+  const actual = normalizeText(detailTitle);
+  if (expected === actual) return true;
+
+  // 仅接受智联 UI 明确的尾部省略，不接受任意子串，避免把同前缀的不同岗位混为一项。
+  const truncatedPrefix = expected.replace(/(?:…|\.\.\.)+$/, "").trimEnd();
+  return truncatedPrefix.length > 0 && truncatedPrefix !== expected && actual.startsWith(truncatedPrefix);
+}
+
 /** 判断详情公司字段是否明确表示用工方客户，而非左侧卡片中的招聘服务公司。 */
 function isClientCompanyText(value: string): boolean {
   return /^客户公司\s*[:：]/.test(normalizeText(value));
@@ -204,7 +221,7 @@ export function parseZhilianJobs(root: ParentNode): ZhilianJobSnapshot[] {
  */
 function isZhilianDetailContainerBoundToJob(root: ParentNode, job: ZhilianJobSnapshot): boolean {
   const detailTitle = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.title)?.textContent);
-  if (!detailTitle || detailTitle !== normalizeText(job.jobTitle)) return false;
+  if (!detailTitle || !isCompatibleJobTitle(job.jobTitle, detailTitle)) return false;
 
   const detailCompany = normalizeText(root.querySelector(ZHILIAN_DETAIL_SELECTORS.company)?.textContent);
   // 外包/猎头职位的左卡显示招聘服务公司，右侧则明确标出“客户公司：”。此时不能把两者当同一字段，

@@ -200,6 +200,26 @@ describe("isZhilianDetailBoundToJob", () => {
     document.querySelector(".job-detail-summary__salary")!.textContent = "1-2万";
     expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
   });
+
+  it("兼容左侧标题被省略号截断而右侧保留完整标题的职位", () => {
+    const job = {
+      cardKey: "zhilian:truncated-title:0",
+      fingerprint: "truncated-title",
+      jobTitle: "后端开发工程师（Java/python/c+…",
+      compName: "科锐尔人力资源服务(苏州)有限公司",
+      jobSalaryText: "1.2-2.4万·14薪",
+    };
+    document.body.innerHTML = `
+      <section class="job-detail-summary">
+        <span class="job-detail-summary__title-text">后端开发工程师（Java/python/c++）</span>
+        <span class="job-detail-summary__salary">1.2-2.4万·14薪</span>
+        <a class="job-detail-summary__company-name">客户公司：某互联网公司</a>
+      </section>`;
+
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(true);
+    document.querySelector(".job-detail-summary__title-text")!.textContent = "后端开发工程师（Java/python/go）";
+    expect(isZhilianDetailBoundToJob(document, job)).toBe(false);
+  });
 });
 
 describe("isZhilianJobCardActive", () => {
